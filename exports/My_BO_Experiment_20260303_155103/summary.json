@@ -1,0 +1,139 @@
+{
+  "experiment_name": "My_BO_Experiment",
+  "created_at": "2026-03-03T15:51:05.909638",
+  "best_distance": 0.0,
+  "n_candidates": 15,
+  "n_batches": 10,
+  "tables": {
+    "candidates_csv": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\tables\\candidates.csv",
+    "candidates_json": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\tables\\candidates.json",
+    "history_csv": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\tables\\history.csv",
+    "history_json": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\tables\\history.json",
+    "pareto_csv": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\tables\\pareto.csv",
+    "pareto_json": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\tables\\pareto.json"
+  },
+  "charts": {
+    "distance_progress": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\charts\\distance_progress.png",
+    "candidate_distances": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\charts\\candidate_distances.png",
+    "objective_traces": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\charts\\objective_traces.png",
+    "parameter_traces": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\charts\\parameter_traces.png",
+    "uncertainty_traces": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\charts\\uncertainty_traces.png"
+  },
+  "report_html": "C:\\Users\\aisci\\bo_vtwo\\exports\\My_BO_Experiment_20260303_155103\\report.html",
+  "config": {
+    "experiment_name": "My_BO_Experiment",
+    "evaluator_type": "virtual",
+    "optimization_mode": "batch",
+    "sdl_settings": {
+      "protocol": "http",
+      "response_timeout": 20.0,
+      "mqtt_host": "localhost",
+      "mqtt_port": 1883,
+      "mqtt_publish_topic": "bo/commands",
+      "mqtt_response_topic": "bo/results",
+      "mqtt_username": null,
+      "mqtt_password": null,
+      "mqtt_client_id": "bo-platform",
+      "http_endpoint": "http://localhost:8000/bo",
+      "http_method": "POST",
+      "http_headers": {},
+      "serial_port": "COM3",
+      "serial_baud": 115200,
+      "serial_timeout": 2.0,
+      "tcp_host": "localhost",
+      "tcp_port": 7000,
+      "digital_twin_control": false,
+      "require_continue_each_trial": true,
+      "embedded_control_mode": "sdl",
+      "embedded_sensor_timeout": 30.0,
+      "embedded_manual_timeout": 1800.0,
+      "embedded_manual_aspiration_volume_ml": 1.0,
+      "embedded_sdl_start_timeout": 7200.0,
+      "embedded_unity_enable": true,
+      "embedded_unity_transport": "livekit",
+      "embedded_unity_host": "0.0.0.0",
+      "embedded_unity_port": 7100,
+      "embedded_unity_dest_identity": "unity",
+      "embedded_livekit_url": "wss://digital-twin-e1hn80jk.livekit.cloud",
+      "embedded_livekit_room": "dt",
+      "embedded_livekit_topic": "twin",
+      "embedded_sdl_livekit_token": "",
+      "embedded_arduino_port": "COM7",
+      "embedded_arduino_baud": 9600,
+      "embedded_log_level": "INFO",
+      "embedded_log_file": "sdl_agent.log"
+    },
+    "task_parameter_name": null,
+    "parameters": [
+      {
+        "name": "param_1",
+        "type": "continuous",
+        "bounds": [
+          0.0,
+          1.0
+        ],
+        "categories": null,
+        "step": null
+      },
+      {
+        "name": "param_2",
+        "type": "continuous",
+        "bounds": [
+          0.0,
+          1.0
+        ],
+        "categories": null,
+        "step": null
+      }
+    ],
+    "objectives": [
+      {
+        "name": "objective_1",
+        "type": "minimize",
+        "target_range": null,
+        "target_value": null,
+        "tolerance": 0.0,
+        "weight": 1.0
+      }
+    ],
+    "models": [
+      {
+        "name": "Random Forest",
+        "type": "random_forest",
+        "hyperparameters": {},
+        "enabled": true
+      },
+      {
+        "name": "Gaussian Process",
+        "type": "gaussian_process",
+        "hyperparameters": {},
+        "enabled": true
+      },
+      {
+        "name": "XGBoost",
+        "type": "xgboost",
+        "hyperparameters": {},
+        "enabled": true
+      }
+    ],
+    "parameter_constraints": [],
+    "optimization_settings": {
+      "enable_hyperparameter_tuning": true,
+      "n_tuning_trials": 20,
+      "batch_iterations": 10,
+      "batch_size": 3,
+      "max_iterations": 30,
+      "optimization_mode": "batch",
+      "random_seed": 42,
+      "n_initial_points": 10,
+      "generation_strategy": "default",
+      "acquisition_function": "auto",
+      "initialization_strategy": "sobol",
+      "initialization_trials": 5,
+      "use_sobol": true,
+      "sobol_points": 5,
+      "use_adaptive_search": true,
+      "use_evolving_constraints": false
+    }
+  }
+}
