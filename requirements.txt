@@ -1,0 +1,31 @@
+# Core app
+streamlit>=1.33
+pandas>=2.0
+numpy>=1.24
+plotly>=5.20
+PyYAML>=6.0
+requests>=2.31
+matplotlib>=3.8
+scipy>=1.10
+scikit-learn>=1.3
+ax-platform>=0.4.0
+
+# SDL transports
+paho-mqtt>=1.6
+pyserial>=3.5
+
+# Optional optimization/model features used by CEID
+optuna>=3.6
+xgboost>=2.0
+pygam>=0.9
+skops>=0.9
+onnxruntime>=1.17
+joblib>=1.3
+
+# Optional data I/O helpers
+openpyxl>=3.1
+xlrd>=2.0
+
+# Optional hardware relay support (RYB_SDL)
+ftd2xx>=1.3; platform_system == "Windows"
+
