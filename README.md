@@ -1,5 +1,5 @@
 # CEID
-Cooperative Experimental Inverse Design platform with Bayesian Optimization and Self-Driving Lab (SDL) integration.
+Cooperative Explorer for Inverse Design platform with Bayesian Optimization and Self-Driving Lab (SDL) integration.
 
 ## What This Repository Contains
 This repository combines:
