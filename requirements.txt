@@ -1,0 +1,28 @@
+# Core Dependencies
+streamlit==1.41.1
+pandas==2.2.3
+numpy==2.1.3
+plotly==5.24.1
+PyYAML==6.0.3
+
+# Bayesian Optimization
+ax-platform==0.4.3
+
+# Machine Learning & Data Processing
+scikit-learn==1.8.0
+
+# Optional ML Models
+xgboost==3.1.2
+optuna==4.6.0
+
+# Model Import/Export
+skops==0.13.0
+onnxruntime==1.23.2
+
+# Communication & Hardware
+requests==2.32.3
+paho-mqtt==2.1.0
+pyserial==3.5
+
+# Database (fixed for ax-platform compatibility)
+SQLAlchemy==1.4.52
