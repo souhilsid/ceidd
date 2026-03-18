@@ -1,0 +1,112 @@
+[
+  {
+    "batch":1,
+    "batch_min_distance":0.0,
+    "batch_mean_distance":0.0,
+    "best_overall_distance":0.0,
+    "n_candidates_evaluated":3,
+    "best_models":{
+
+    },
+    "generation_strategy":"default"
+  },
+  {
+    "batch":2,
+    "batch_min_distance":0.0,
+    "batch_mean_distance":0.0,
+    "best_overall_distance":0.0,
+    "n_candidates_evaluated":6,
+    "best_models":{
+
+    },
+    "generation_strategy":"default"
+  },
+  {
+    "batch":3,
+    "batch_min_distance":0.0,
+    "batch_mean_distance":0.0,
+    "best_overall_distance":0.0,
+    "n_candidates_evaluated":8,
+    "best_models":{
+
+    },
+    "generation_strategy":"default"
+  },
+  {
+    "batch":4,
+    "batch_min_distance":0.0,
+    "batch_mean_distance":0.0,
+    "best_overall_distance":0.0,
+    "n_candidates_evaluated":9,
+    "best_models":{
+
+    },
+    "generation_strategy":"default"
+  },
+  {
+    "batch":5,
+    "batch_min_distance":0.0,
+    "batch_mean_distance":0.0,
+    "best_overall_distance":0.0,
+    "n_candidates_evaluated":10,
+    "best_models":{
+
+    },
+    "generation_strategy":"default"
+  },
+  {
+    "batch":6,
+    "batch_min_distance":0.0,
+    "batch_mean_distance":0.0,
+    "best_overall_distance":0.0,
+    "n_candidates_evaluated":11,
+    "best_models":{
+
+    },
+    "generation_strategy":"default"
+  },
+  {
+    "batch":7,
+    "batch_min_distance":0.0,
+    "batch_mean_distance":0.0,
+    "best_overall_distance":0.0,
+    "n_candidates_evaluated":12,
+    "best_models":{
+
+    },
+    "generation_strategy":"default"
+  },
+  {
+    "batch":8,
+    "batch_min_distance":0.0,
+    "batch_mean_distance":0.0,
+    "best_overall_distance":0.0,
+    "n_candidates_evaluated":13,
+    "best_models":{
+
+    },
+    "generation_strategy":"default"
+  },
+  {
+    "batch":9,
+    "batch_min_distance":0.0,
+    "batch_mean_distance":0.0,
+    "best_overall_distance":0.0,
+    "n_candidates_evaluated":14,
+    "best_models":{
+
+    },
+    "generation_strategy":"default"
+  },
+  {
+    "batch":10,
+    "batch_min_distance":0.0,
+    "batch_mean_distance":0.0,
+    "best_overall_distance":0.0,
+    "n_candidates_evaluated":15,
+    "best_models":{
+
+    },
+    "generation_strategy":"default"
+  }
+]

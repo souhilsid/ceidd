@@ -1,0 +1,11 @@
+batch,batch_min_distance,batch_mean_distance,best_overall_distance,n_candidates_evaluated,best_models,generation_strategy
+1,0.0,0.0,0.0,3,{},default
+2,0.0,0.0,0.0,6,{},default
+3,0.0,0.0,0.0,8,{},default
+4,0.0,0.0,0.0,9,{},default
+5,0.0,0.0,0.0,10,{},default
+6,0.0,0.0,0.0,11,{},default
+7,0.0,0.0,0.0,12,{},default
+8,0.0,0.0,0.0,13,{},default
+9,0.0,0.0,0.0,14,{},default
+10,0.0,0.0,0.0,15,{},default
