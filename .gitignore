@@ -132,3 +132,5 @@ Thumbs.db
 .tmp_*/
 checkpoints/
 exports/
+.ceid_runtime/
+.streamlit/secrets.toml

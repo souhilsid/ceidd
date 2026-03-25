@@ -12,11 +12,13 @@ class ExperimentDatabaseManager:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(self.db_path))
+        return sqlite3.connect(str(self.db_path), timeout=30)
 
     def initialize(self) -> None:
         with self._connect() as conn:
             cur = conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA synchronous=NORMAL")
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS experiments (

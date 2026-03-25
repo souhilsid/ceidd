@@ -4,6 +4,15 @@ import subprocess
 import sys
 import os
 
+
+def _platform_urls(port: int, local_ip: str):
+    return [
+        f"http://localhost:{port}",
+        f"http://127.0.0.1:{port}",
+        f"http://{local_ip}:{port}",
+        f"http://0.0.0.0:{port}",
+    ]
+
 def check_port(port=8501):
     """Check if port is available"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -22,47 +31,63 @@ def find_available_port(start_port=8501, max_attempts=10):
     return None, "No available ports found"
 
 def kill_process_on_port(port=8501):
-    """Kill process using the port (Windows)"""
+    """Kill process using the port on Windows, Linux, or macOS."""
     try:
-        # Find PID using the port
-        result = subprocess.run(
-            ["netstat", "-ano", "|", "findstr", f":{port}"],
-            capture_output=True, text=True, shell=True
-        )
-        
-        if result.stdout:
-            lines = result.stdout.strip().split('\n')
-            for line in lines:
-                if 'LISTENING' in line:
-                    parts = line.split()
-                    pid = parts[-1]
-                    print(f"Killing process {pid} on port {port}")
-                    subprocess.run(["taskkill", "/PID", pid, "/F"])
-                    return True
+        if os.name == 'nt':
+            result = subprocess.run(
+                f'netstat -ano | findstr :{port}',
+                capture_output=True,
+                text=True,
+                shell=True,
+            )
+
+            if result.stdout:
+                lines = result.stdout.strip().split('\n')
+                for line in lines:
+                    if 'LISTENING' in line:
+                        parts = line.split()
+                        pid = parts[-1]
+                        print(f"Killing process {pid} on port {port}")
+                        subprocess.run(["taskkill", "/PID", pid, "/F"], check=False)
+                        return True
+        else:
+            finder = subprocess.run(
+                ["lsof", "-ti", f"tcp:{port}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            pid = finder.stdout.strip().splitlines()
+            if pid:
+                for entry in pid:
+                    print(f"Killing process {entry} on port {port}")
+                    subprocess.run(["kill", "-9", entry], check=False)
+                return True
         return False
     except Exception as e:
         print(f"Error killing process: {e}")
         return False
 
 def main():
+    port = int(os.getenv("PORT", "8501"))
     print(" Port Troubleshooter")
     print("=" * 50)
     
     # Check current port
-    available, message = check_port(8501)
-    print(f"Port 8501: {message}")
+    available, message = check_port(port)
+    print(f"Port {port}: {message}")
     
     if not available:
-        print("\n Port 8501 is busy. Trying to fix...")
+        print(f"\n Port {port} is busy. Trying to fix...")
         
         # Try to kill the process
-        if kill_process_on_port(8501):
-            print(" Killed process on port 8501")
+        if kill_process_on_port(port):
+            print(f" Killed process on port {port}")
         else:
             print(" Could not kill process automatically")
         
         # Find alternative port
-        new_port, msg = find_available_port(8501)
+        new_port, msg = find_available_port(port)
         print(f"\n Alternative: Use port {new_port}")
         print(f"   Run: streamlit run app.py --server.port {new_port}")
     
@@ -76,10 +101,8 @@ def main():
         
         # Test URLs
         print("\n Try these URLs:")
-        print(f"http://localhost:8501")
-        print(f"http://127.0.0.1:8501") 
-        print(f"http://{local_ip}:8501")
-        print(f"http://0.0.0.0:8501")
+        for url in _platform_urls(port, local_ip):
+            print(url)
         
     except Exception as e:
         print(f"Error getting network info: {e}")

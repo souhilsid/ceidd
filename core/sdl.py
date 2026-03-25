@@ -32,30 +32,30 @@ except ImportError:
 @dataclass
 class SDLSettings:
     protocol: str = "http"  # "mqtt", "http", "serial", "tcp", "embedded"
-    response_timeout: float = 20.0
+    response_timeout: float = float(os.getenv("SDL_RESPONSE_TIMEOUT", "20.0"))
 
     # MQTT
-    mqtt_host: str = "localhost"
-    mqtt_port: int = 1883
-    mqtt_publish_topic: str = "bo/commands"
-    mqtt_response_topic: str = "bo/results"
+    mqtt_host: str = os.getenv("SDL_MQTT_HOST", "localhost")
+    mqtt_port: int = int(os.getenv("SDL_MQTT_PORT", "1883"))
+    mqtt_publish_topic: str = os.getenv("SDL_MQTT_PUBLISH_TOPIC", "bo/commands")
+    mqtt_response_topic: str = os.getenv("SDL_MQTT_RESPONSE_TOPIC", "bo/results")
     mqtt_username: Optional[str] = None
     mqtt_password: Optional[str] = None
-    mqtt_client_id: str = "bo-platform"
+    mqtt_client_id: str = os.getenv("SDL_MQTT_CLIENT_ID", "bo-platform")
 
     # HTTP
-    http_endpoint: str = "http://localhost:8000/bo"
-    http_method: str = "POST"
+    http_endpoint: str = os.getenv("SDL_HTTP_ENDPOINT", "http://localhost:8000/bo")
+    http_method: str = os.getenv("SDL_HTTP_METHOD", "POST")
     http_headers: Dict[str, str] = field(default_factory=dict)
 
     # Serial
-    serial_port: str = "COM3"
-    serial_baud: int = 115200
-    serial_timeout: float = 2.0
+    serial_port: str = os.getenv("SDL_SERIAL_PORT", "COM3" if os.name == "nt" else "/dev/ttyUSB0")
+    serial_baud: int = int(os.getenv("SDL_SERIAL_BAUD", "115200"))
+    serial_timeout: float = float(os.getenv("SDL_SERIAL_TIMEOUT", "2.0"))
 
     # TCP
-    tcp_host: str = "localhost"
-    tcp_port: int = 7000
+    tcp_host: str = os.getenv("SDL_TCP_HOST", "localhost")
+    tcp_port: int = int(os.getenv("SDL_TCP_PORT", "7000"))
 
     # SDL control policy (optional passthrough)
     digital_twin_control: bool = False
@@ -63,23 +63,23 @@ class SDLSettings:
 
     # Embedded RYB SDL (in-process CEID runner)
     embedded_control_mode: str = "sdl"  # "sdl" | "manual"
-    embedded_sensor_timeout: float = 30.0
-    embedded_manual_timeout: float = 1800.0
-    embedded_manual_aspiration_volume_ml: float = 1.0
-    embedded_sdl_start_timeout: float = 7200.0
-    embedded_unity_enable: bool = True
-    embedded_unity_transport: str = "livekit"  # "livekit" | "tcp" | "none"
-    embedded_unity_host: str = "0.0.0.0"
-    embedded_unity_port: int = 7100
-    embedded_unity_dest_identity: str = "unity"
-    embedded_livekit_url: str = "wss://digital-twin-e1hn80jk.livekit.cloud"
-    embedded_livekit_room: str = "dt"
-    embedded_livekit_topic: str = "twin"
+    embedded_sensor_timeout: float = float(os.getenv("SDL_EMBEDDED_SENSOR_TIMEOUT", "30.0"))
+    embedded_manual_timeout: float = float(os.getenv("SDL_EMBEDDED_MANUAL_TIMEOUT", "1800.0"))
+    embedded_manual_aspiration_volume_ml: float = float(os.getenv("SDL_EMBEDDED_MANUAL_ASPIRATION_VOLUME_ML", "1.0"))
+    embedded_sdl_start_timeout: float = float(os.getenv("SDL_EMBEDDED_START_TIMEOUT", "7200.0"))
+    embedded_unity_enable: bool = os.getenv("SDL_EMBEDDED_UNITY_ENABLE", "true").lower() in {"1", "true", "yes", "on"}
+    embedded_unity_transport: str = os.getenv("SDL_EMBEDDED_UNITY_TRANSPORT", "livekit")  # "livekit" | "tcp" | "none"
+    embedded_unity_host: str = os.getenv("SDL_EMBEDDED_UNITY_HOST", "0.0.0.0")
+    embedded_unity_port: int = int(os.getenv("SDL_EMBEDDED_UNITY_PORT", "7100"))
+    embedded_unity_dest_identity: str = os.getenv("SDL_EMBEDDED_UNITY_DEST_IDENTITY", "unity")
+    embedded_livekit_url: str = os.getenv("SDL_EMBEDDED_LIVEKIT_URL", "wss://digital-twin-e1hn80jk.livekit.cloud")
+    embedded_livekit_room: str = os.getenv("SDL_EMBEDDED_LIVEKIT_ROOM", "dt")
+    embedded_livekit_topic: str = os.getenv("SDL_EMBEDDED_LIVEKIT_TOPIC", "twin")
     embedded_sdl_livekit_token: str = ""
-    embedded_arduino_port: str = "COM7"
-    embedded_arduino_baud: int = 9600
-    embedded_log_level: str = "INFO"
-    embedded_log_file: str = "sdl_agent.log"
+    embedded_arduino_port: str = os.getenv("SDL_EMBEDDED_ARDUINO_PORT", os.getenv("SDL_ARDUINO_PORT", "COM7" if os.name == "nt" else "/dev/ttyUSB0"))
+    embedded_arduino_baud: int = int(os.getenv("SDL_EMBEDDED_ARDUINO_BAUD", "9600"))
+    embedded_log_level: str = os.getenv("SDL_EMBEDDED_LOG_LEVEL", "INFO")
+    embedded_log_file: str = os.getenv("SDL_EMBEDDED_LOG_FILE", "sdl_agent.log")
 
 
 class SDLConnector:

@@ -44,15 +44,15 @@ except ImportError:
 # =========================
 # ------ CONFIG VARS ------
 # =========================
-PRINTER_IP = "192.168.1.101"
+PRINTER_IP = os.getenv("SDL_PRINTER_IP", "192.168.1.101")
 MOONRAKER_URL = f"http://{PRINTER_IP}/printer/gcode/script"
 LIVEKIT_DEFAULT_URL = "wss://digital-twin-e1hn80jk.livekit.cloud"
 LIVEKIT_DEFAULT_ROOM = "dt"
 LIVEKIT_DEFAULT_TOPIC = "twin"
 
 # --- 1. SENSOR CONFIG ---
-ARDUINO_PORT = "COM5"
-BAUD_RATE = 9600
+ARDUINO_PORT = os.getenv("SDL_ARDUINO_PORT", "COM5" if os.name == "nt" else "/dev/ttyUSB0")
+BAUD_RATE = int(os.getenv("SDL_ARDUINO_BAUD", "9600"))
 
 # --- 2. ROBOT COORDINATES ---
 home_pos_x = 25.5
@@ -1899,24 +1899,24 @@ class SDLHardwareAgent:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Self-driving lab hardware agent (headless).")
-    parser.add_argument("--protocol", choices=["mqtt", "http", "tcp", "serial"], default="http")
+    parser.add_argument("--protocol", choices=["mqtt", "http", "tcp", "serial"], default=os.getenv("SDL_PROTOCOL", "http"))
     # MQTT
-    parser.add_argument("--mqtt-host", default="localhost")
-    parser.add_argument("--mqtt-port", type=int, default=1883)
-    parser.add_argument("--mqtt-command-topic", default="bo/commands")
-    parser.add_argument("--mqtt-response-topic", default="bo/results")
+    parser.add_argument("--mqtt-host", default=os.getenv("SDL_MQTT_HOST", "localhost"))
+    parser.add_argument("--mqtt-port", type=int, default=int(os.getenv("SDL_MQTT_PORT", "1883")))
+    parser.add_argument("--mqtt-command-topic", default=os.getenv("SDL_MQTT_COMMAND_TOPIC", "bo/commands"))
+    parser.add_argument("--mqtt-response-topic", default=os.getenv("SDL_MQTT_RESPONSE_TOPIC", "bo/results"))
     # HTTP
-    parser.add_argument("--http-host", default="0.0.0.0")
-    parser.add_argument("--http-port", type=int, default=8000)
+    parser.add_argument("--http-host", default=os.getenv("SDL_HTTP_HOST", "0.0.0.0"))
+    parser.add_argument("--http-port", type=int, default=int(os.getenv("SDL_HTTP_PORT", "8000")))
     # TCP
-    parser.add_argument("--tcp-host", default="0.0.0.0")
-    parser.add_argument("--tcp-port", type=int, default=7000)
+    parser.add_argument("--tcp-host", default=os.getenv("SDL_TCP_HOST", "0.0.0.0"))
+    parser.add_argument("--tcp-port", type=int, default=int(os.getenv("SDL_TCP_PORT", "7000")))
     # Serial (platform)
-    parser.add_argument("--serial-port", default="COM3")
-    parser.add_argument("--serial-baud", type=int, default=115200)
+    parser.add_argument("--serial-port", default=os.getenv("SDL_SERIAL_PORT", "COM3" if os.name == "nt" else "/dev/ttyUSB0"))
+    parser.add_argument("--serial-baud", type=int, default=int(os.getenv("SDL_SERIAL_BAUD", "115200")))
     # Logging and timing
-    parser.add_argument("--log-file", default="sdl_agent.log", help="Path to log file")
-    parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
+    parser.add_argument("--log-file", default=os.getenv("SDL_LOG_FILE", "sdl_agent.log"), help="Path to log file")
+    parser.add_argument("--log-level", default=os.getenv("SDL_LOG_LEVEL", "INFO"), choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
     parser.add_argument(
         "--trace-csv",
         default=os.getenv("SDL_TRACE_CSV", ""),

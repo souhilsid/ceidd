@@ -49,9 +49,11 @@ from utils.state_manager import save_json, load_json
 from utils.reporting import export_run_artifacts
 from utils.checkpoint_csv import export_checkpoint_csvs
 from utils.database_manager import ExperimentDatabaseManager
+from utils.runtime import get_runtime_paths, persist_uploaded_bytes
 
 class BOPlatform:
     def __init__(self):
+        self.runtime_paths = get_runtime_paths()
         self.config_manager = ConfigManager()
         self.model_registry = ModelRegistry()
         self.model_factory = ModelFactory(self.model_registry)
@@ -177,9 +179,15 @@ class BOPlatform:
                 "normalize_weight_norm": True,
             }
         if 'export_root_dir' not in st.session_state:
-            st.session_state.export_root_dir = os.path.join(os.getcwd(), "exports")
+            st.session_state.export_root_dir = str(self.runtime_paths.exports_dir)
         if 'export_db_path' not in st.session_state:
-            st.session_state.export_db_path = os.path.join(os.getcwd(), "exports", "bo_platform.db")
+            st.session_state.export_db_path = str(self.runtime_paths.database_path)
+        if 'runtime_storage_dir' not in st.session_state:
+            st.session_state.runtime_storage_dir = str(self.runtime_paths.storage_root)
+        if 'uploaded_dataset_path' not in st.session_state:
+            st.session_state.uploaded_dataset_path = None
+        if 'imported_config_path' not in st.session_state:
+            st.session_state.imported_config_path = None
         if 'last_export_artifacts' not in st.session_state:
             st.session_state.last_export_artifacts = None
         if 'nav_page' not in st.session_state:
@@ -453,7 +461,8 @@ class BOPlatform:
         
         if uploaded_file is not None:
             try:
-                df = pd.read_csv(uploaded_file)
+                file_bytes = uploaded_file.getvalue()
+                df = pd.read_csv(io.BytesIO(file_bytes))
                 
                 # Keep upload flexible: allow small datasets but flag lower confidence.
                 if len(df) < 5:
@@ -462,8 +471,16 @@ class BOPlatform:
                     )
                 
                 st.session_state.uploaded_data = df
+                dataset_path = persist_uploaded_bytes(
+                    content=file_bytes,
+                    original_name=uploaded_file.name,
+                    target_dir=self.runtime_paths.datasets_dir,
+                    prefix="dataset",
+                )
+                st.session_state.uploaded_dataset_path = str(dataset_path)
                 
                 st.success(f":material/check_circle: Loaded dataset with {df.shape[0]} rows and {df.shape[1]} columns")
+                st.caption(f"Stored dataset copy: {dataset_path}")
                 
                 # Show data preview
                 st.subheader("Data Preview")
@@ -489,6 +506,8 @@ class BOPlatform:
         elif st.session_state.get('uploaded_data') is not None:
             df = st.session_state.uploaded_data
             st.info(f"Using previously uploaded dataset: {df.shape[0]} rows Ã— {df.shape[1]} columns")
+            if st.session_state.get('uploaded_dataset_path'):
+                st.caption(f"Stored dataset copy: {st.session_state.uploaded_dataset_path}")
             st.dataframe(df.head(5))
 
     def _default_uncertainty_config(self) -> Dict[str, Any]:
@@ -853,16 +872,17 @@ class BOPlatform:
      try:
         # Read the uploaded config file
         config_content = uploaded_config.getvalue().decode('utf-8')
-        
-        # Create a temporary file to load the config
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp_file:
-            tmp_file.write(config_content)
-            tmp_file_path = tmp_file.name
+        config_path = persist_uploaded_bytes(
+            content=uploaded_config.getvalue(),
+            original_name=uploaded_config.name,
+            target_dir=self.runtime_paths.configs_dir,
+            prefix="config",
+        )
+        st.session_state.imported_config_path = str(config_path)
         
         try:
             # First, validate the YAML structure
-            with open(tmp_file_path, 'r') as f:
-                config_dict = yaml.safe_load(f)
+            config_dict = yaml.safe_load(config_content)
             
             # Check for required sections
             required_sections = ['experiment_name', 'parameters', 'objectives']
@@ -943,28 +963,20 @@ class BOPlatform:
             # Check for parameter_constraints
             if 'parameter_constraints' not in config_dict:
                 config_dict['parameter_constraints'] = []
-            
-            # Write the updated config back to temporary file
-            with open(tmp_file_path, 'w') as f:
-                yaml.dump(config_dict, f, default_flow_style=False)
-            
+
             # Now load the configuration using ConfigManager
-            config = self.config_manager.load_config(tmp_file_path)
+            config = self._config_from_dict(config_dict)
             
             # Update session state with loaded configuration
             self._update_ui_from_config(config)
             
             st.success(f":material/check_circle: Imported configuration: {config.experiment_name}")
+            st.caption(f"Stored config copy: {config_path}")
             st.rerun()
             
         except Exception as e:
             st.error(f":material/error: Error processing configuration: {e}")
             st.info("Please check that the YAML file is properly formatted.")
-            
-        finally:
-            # Clean up temporary file
-            if os.path.exists(tmp_file_path):
-                os.unlink(tmp_file_path)
             
      except Exception as e:
         st.error(f":material/error: Error importing configuration: {e}")
@@ -1835,10 +1847,14 @@ class BOPlatform:
             current_upload_id = f"{uploaded_custom_model.name}_{uploaded_custom_model.size}_{uploaded_custom_model.type}"
             if current_upload_id not in st.session_state.processed_uploads:
                 try:
-                    file_extension = file_extensions[model_format][0] if model_format != 'auto' else 'pkl'
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}') as tmp_file:
-                        tmp_file.write(uploaded_custom_model.getvalue())
-                        model_path = tmp_file.name
+                    model_path = str(
+                        persist_uploaded_bytes(
+                            content=uploaded_custom_model.getvalue(),
+                            original_name=uploaded_custom_model.name,
+                            target_dir=self.runtime_paths.models_dir,
+                            prefix="model",
+                        )
+                    )
                     st.session_state.custom_model_counter += 1
                     model_name = f"Custom_{model_format}_{st.session_state.custom_model_counter}"
                     st.session_state.custom_models[model_name] = {
@@ -2812,8 +2828,7 @@ class BOPlatform:
                     if uploaded_checkpoint is not None and getattr(uploaded_checkpoint, "name", None):
                         loaded_name = Path(str(uploaded_checkpoint.name)).stem
                     output_prefix = os.path.join(
-                        os.getcwd(),
-                        "checkpoints",
+                        str(self.runtime_paths.checkpoints_dir),
                         f"{loaded_name}_export_{export_stamp}",
                     )
                     csv_paths = export_checkpoint_csvs(checkpoint_data, output_prefix=output_prefix)
@@ -3322,7 +3337,7 @@ class BOPlatform:
         )
 
     def _save_checkpoint(self, config: OptimizationConfig, X: np.ndarray, Y: np.ndarray, Y_sem: Optional[np.ndarray] = None, optimizer: Optional[BayesianOptimizer] = None, progress: Optional[Dict[str, Any]] = None, filename: Optional[str] = None) -> str:
-        checkpoint_dir = os.path.join(os.getcwd(), 'checkpoints')
+        checkpoint_dir = str(self.runtime_paths.checkpoints_dir)
         os.makedirs(checkpoint_dir, exist_ok=True)
         stamp = int(time.time())
         fname = filename or f"bo_checkpoint_{stamp}.json"
@@ -3744,19 +3759,21 @@ class BOPlatform:
         with export_col1:
             export_root = st.text_input(
                 "Export root directory",
-                value=st.session_state.get('export_root_dir', os.path.join(os.getcwd(), "exports")),
+                value=st.session_state.get('export_root_dir', str(self.runtime_paths.exports_dir)),
                 key="export_root_dir_input",
-                help="Artifacts are written into a timestamped folder under this directory.",
+                help="Artifacts are written into a timestamped folder under this directory. Override with CEID_EXPORTS_DIR if needed.",
             )
             st.session_state.export_root_dir = export_root
         with export_col2:
             db_path = st.text_input(
                 "SQLite database path",
-                value=st.session_state.get('export_db_path', os.path.join(os.getcwd(), "exports", "bo_platform.db")),
+                value=st.session_state.get('export_db_path', str(self.runtime_paths.database_path)),
                 key="export_db_path_input",
                 help="Used when saving run metadata and tables into SQLite.",
             )
             st.session_state.export_db_path = db_path
+
+        st.caption(f"Managed runtime storage root: {st.session_state.runtime_storage_dir}")
 
         save_to_database = st.checkbox(
             "Save generated run into SQLite database",

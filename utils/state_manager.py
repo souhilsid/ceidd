@@ -5,6 +5,8 @@ import tempfile
 from typing import Any, Dict
 import numpy as np
 
+from utils.runtime import get_runtime_paths
+
 
 def _default(obj: Any):
     """JSON serializer for numpy types."""
@@ -19,8 +21,11 @@ def save_json(path: str, payload: Dict[str, Any]) -> str:
     dirpath = os.path.dirname(path)
     if dirpath:
         os.makedirs(dirpath, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, default=_default)
+    tmp_dir = dirpath or str(get_runtime_paths().temp_dir)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=tmp_dir, delete=False, suffix=".json") as tmp_file:
+        json.dump(payload, tmp_file, indent=2, default=_default)
+        tmp_path = tmp_file.name
+    os.replace(tmp_path, path)
     return path
 
 
@@ -31,7 +36,7 @@ def load_json(path: str) -> Dict[str, Any]:
 
 def dump_ax_to_dict(ax_client) -> Dict[str, Any]:
     """Persist AxClient into a dict (round-trips through a temp file)."""
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json", dir=str(get_runtime_paths().temp_dir))
     tmp_path = tmp.name
     tmp.close()
     try:
@@ -46,7 +51,7 @@ def dump_ax_to_dict(ax_client) -> Dict[str, Any]:
 
 def load_ax_from_dict(ax_client_cls, payload: Dict[str, Any]):
     """Recreate AxClient from a dict produced by dump_ax_to_dict."""
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json", dir=str(get_runtime_paths().temp_dir))
     tmp_path = tmp.name
     tmp.close()
     try:

@@ -126,6 +126,65 @@ If port is busy, use:
 python port_checker.py
 ```
 
+## 4.4 Runtime Storage
+
+CEID now uses a managed runtime storage root for uploaded files, checkpoints, exports, and SQLite state.
+
+Default resolution order:
+- `CEID_STORAGE_DIR` if set
+- `./.ceid_runtime` in the project root if writable
+- system temp directory as a fallback
+
+Useful overrides:
+- `CEID_STORAGE_DIR`
+- `CEID_EXPORTS_DIR`
+- `CEID_CHECKPOINTS_DIR`
+- `CEID_DB_PATH`
+- `CEID_TEMP_DIR`
+
+Uploads are persisted under the managed storage root so dataset/config/model uploads are not tied to anonymous temp files.
+
+## 4.5 Docker
+
+Build and run:
+
+```powershell
+docker build -t ceid-app .
+docker run --rm -p 8501:8501 -e CEID_STORAGE_DIR=/data -v ${PWD}/docker-data:/data ceid-app
+```
+
+Notes:
+- Mount `/data` for persistent checkpoints, exports, and SQLite state.
+- Hardware-backed SDL modes require additional device/network access and are not suitable for most hosted container platforms.
+
+## 4.6 Streamlit Cloud / Hosted Streamlit
+
+Entry point:
+- `app.py`
+
+Recommended environment variables:
+- `CEID_STORAGE_DIR=/tmp/ceid`
+
+Hosted Streamlit is suitable for:
+- virtual evaluator workflows
+- uploaded datasets/configs/models
+- report and ZIP download generation
+
+Hosted Streamlit is not suitable for:
+- direct serial/COM hardware access
+- embedded SDL hardware control
+- guaranteed persistent disk across app restarts unless the platform provides it
+
+## 4.7 VM Deployment
+
+For a Windows or Linux VM:
+- create a Python 3.10+ environment
+- install `requirements.txt`
+- set `CEID_STORAGE_DIR` to a writable persistent folder
+- run `streamlit run app.py --server.address 0.0.0.0 --server.port 8501`
+
+For Linux VMs using SDL serial mode, set `SDL_SERIAL_PORT` to the correct device path such as `/dev/ttyUSB0`.
+
 ## 5. Data Requirements
 
 ### 5.1 Minimum expectations
