@@ -32,7 +32,7 @@ except ImportError:
 @dataclass
 class SDLSettings:
     protocol: str = "http"  # "mqtt", "http", "serial", "tcp", "embedded"
-    response_timeout: float = float(os.getenv("SDL_RESPONSE_TIMEOUT", "20.0"))
+    response_timeout: float = float(os.getenv("SDL_RESPONSE_TIMEOUT", "120.0"))
 
     # MQTT
     mqtt_host: str = os.getenv("SDL_MQTT_HOST", "localhost")
@@ -75,7 +75,7 @@ class SDLSettings:
     embedded_livekit_url: str = os.getenv("SDL_EMBEDDED_LIVEKIT_URL", "wss://digital-twin-e1hn80jk.livekit.cloud")
     embedded_livekit_room: str = os.getenv("SDL_EMBEDDED_LIVEKIT_ROOM", "dt")
     embedded_livekit_topic: str = os.getenv("SDL_EMBEDDED_LIVEKIT_TOPIC", "twin")
-    embedded_sdl_livekit_token: str = ""
+    embedded_sdl_livekit_token: str = os.getenv("SDL_EMBEDDED_LIVEKIT_TOKEN", os.getenv("SDL_LIVEKIT_TOKEN", ""))
     embedded_arduino_port: str = os.getenv("SDL_EMBEDDED_ARDUINO_PORT", os.getenv("SDL_ARDUINO_PORT", "COM7" if os.name == "nt" else "/dev/ttyUSB0"))
     embedded_arduino_baud: int = int(os.getenv("SDL_EMBEDDED_ARDUINO_BAUD", "9600"))
     embedded_log_level: str = os.getenv("SDL_EMBEDDED_LOG_LEVEL", "INFO")
@@ -344,24 +344,37 @@ class SDLConnector:
         payload = (json.dumps(message) + "\n").encode("utf-8")
         deadline = time.time() + timeout
 
-        with socket.create_connection((self.settings.tcp_host, self.settings.tcp_port), timeout=timeout) as sock:
-            sock.settimeout(timeout)
-            sock.sendall(payload)
-            buffer = b""
-            while time.time() < deadline:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                buffer += chunk
-                if b"\n" in buffer:
-                    line, _, _rest = buffer.partition(b"\n")
+        try:
+            with socket.create_connection((self.settings.tcp_host, self.settings.tcp_port), timeout=timeout) as sock:
+                sock.settimeout(timeout)
+                sock.sendall(payload)
+                buffer = b""
+                while time.time() < deadline:
                     try:
-                        parsed = json.loads(line.decode("utf-8"))
-                        return parsed
-                    except Exception:
-                        buffer = _rest
+                        chunk = sock.recv(4096)
+                    except socket.timeout:
+                        if time.time() >= deadline:
+                            break
                         continue
-        raise TimeoutError(f"TCP response timeout after {timeout}s")
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    if b"\n" in buffer:
+                        line, _, _rest = buffer.partition(b"\n")
+                        try:
+                            parsed = json.loads(line.decode("utf-8"))
+                            return parsed
+                        except Exception:
+                            buffer = _rest
+                            continue
+        except socket.timeout as exc:
+            raise TimeoutError(
+                f"TCP response timeout after {timeout}s from {self.settings.tcp_host}:{self.settings.tcp_port}"
+            ) from exc
+
+        raise TimeoutError(
+            f"TCP response timeout after {timeout}s from {self.settings.tcp_host}:{self.settings.tcp_port}"
+        )
 
     def _connect_embedded(self):
         if self._embedded_runner is not None and getattr(self._embedded_runner, "started", False):

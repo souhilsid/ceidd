@@ -120,6 +120,7 @@ class BayesianOptimizer:
         self.original_X = self.X_data.copy()
         self.original_Y = self.Y_data.copy()
         self.original_Y_sem = self.Y_sem_data.copy()
+        self._rng = np.random.default_rng(self.config.random_seed)
 
         # Validate strategy compatibility early so UI can surface actionable errors.
         self._validate_strategy_conditions()
@@ -581,6 +582,74 @@ class BayesianOptimizer:
                     return False
         return True
 
+    def _normalize_candidate_parameters(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply the same constraint/adaptive enforcement used at evaluation time."""
+        proposed_parameters = dict(parameters or {})
+        constrained_parameters = self._enforce_parameter_constraints(proposed_parameters)
+        adaptive_parameters = self._apply_adaptive_search_space(constrained_parameters)
+        return self._enforce_parameter_constraints(adaptive_parameters)
+
+    def _is_duplicate_candidate(
+        self,
+        parameters: Dict[str, Any],
+        pending_candidates: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
+        """Return True if these effective parameters were already seen in this run."""
+        normalized_parameters = self._normalize_candidate_parameters(parameters)
+        for candidate in self.all_candidates:
+            existing_params = candidate.get("parameters")
+            if isinstance(existing_params, dict) and self._parameter_dicts_equal(existing_params, normalized_parameters):
+                return True
+        for pending in pending_candidates or []:
+            if isinstance(pending, dict) and self._parameter_dicts_equal(pending, normalized_parameters):
+                return True
+        return False
+
+    def _sample_unique_fallback_candidate(
+        self,
+        pending_candidates: Optional[List[Dict[str, Any]]] = None,
+        max_attempts: int = 128,
+    ) -> Optional[Dict[str, Any]]:
+        """Sample a feasible, non-duplicate point when Ax keeps proposing collapsed duplicates."""
+        for _ in range(max_attempts):
+            sampled: Dict[str, Any] = {}
+            for param_cfg in self.config.parameters:
+                param_type = param_cfg.type.value if hasattr(param_cfg.type, "value") else str(param_cfg.type)
+                param_name = param_cfg.name
+
+                if param_type == "categorical":
+                    categories = list(param_cfg.categories or [])
+                    if not categories:
+                        continue
+                    sampled[param_name] = categories[int(self._rng.integers(0, len(categories)))]
+                    continue
+
+                if param_cfg.bounds is None:
+                    continue
+
+                low, high = float(param_cfg.bounds[0]), float(param_cfg.bounds[1])
+                adaptive_bounds = self.current_adaptive_bounds.get(param_name)
+                if adaptive_bounds is not None:
+                    low, high = float(adaptive_bounds[0]), float(adaptive_bounds[1])
+
+                if param_type == "discrete":
+                    step = float(getattr(param_cfg, "step", 1) or 1)
+                    if step <= 0:
+                        sampled[param_name] = low
+                    else:
+                        n_steps = max(0, int(round((high - low) / step)))
+                        sampled[param_name] = low + int(self._rng.integers(0, n_steps + 1)) * step
+                else:
+                    sampled[param_name] = low if abs(high - low) <= 1e-12 else float(self._rng.uniform(low, high))
+
+            normalized = self._normalize_candidate_parameters(sampled)
+            if not self._satisfies_parameter_constraints(normalized):
+                continue
+            if self._is_duplicate_candidate(normalized, pending_candidates=pending_candidates):
+                continue
+            return normalized
+        return None
+
     def _update_evaluator_selection_context(self, batch_idx: int, total_batches: int) -> None:
         if self.evaluator_type != EvaluatorType.VIRTUAL or self.evaluator is None:
             return
@@ -800,6 +869,7 @@ class BayesianOptimizer:
         distance: float,
         objective_outputs: Dict[str, Any],
         objective_uncertainties: Optional[Dict[str, float]] = None,
+        distance_sem: Optional[float] = None,
     ) -> Dict[str, Tuple[float, float]]:
         uncertainties = objective_uncertainties or {}
         aggregate_sem = self._aggregate_objective_uncertainty(uncertainties)
@@ -821,7 +891,8 @@ class BayesianOptimizer:
             if raw_data:
                 return raw_data
 
-        return {"distance": (float(distance), aggregate_sem)}
+        resolved_distance_sem = aggregate_sem if distance_sem is None else self._sanitize_sem(distance_sem)
+        return {"distance": (float(distance), resolved_distance_sem)}
 
     def _extract_uploaded_objective_uncertainties(self, row_idx: int) -> Dict[str, float]:
         if self.Y_sem_data is None or self.Y_sem_data.shape != self.Y_data.shape:
@@ -1091,13 +1162,20 @@ class BayesianOptimizer:
                             steps_from_min = round((raw_value - min_bound) / step)
                             discrete_value = min_bound + steps_from_min * step
                             discrete_value = max(min_bound, min(max_bound, discrete_value))
-                            if step != 1:
+                            if step == 1 or step == 1.0:
+                                # Ax INT parameters require Python ints, not float-valued ints.
+                                discrete_value = int(round(discrete_value))
+                            else:
                                 decimal_places = len(str(step).split('.')[-1]) if '.' in str(step) else 0
                                 discrete_value = round(discrete_value, decimal_places)
                             params[param_name] = discrete_value
                             print(f"  ?? Discrete experimental: {raw_value} -> {discrete_value}")
                     else:
                         params[param_name] = raw_value
+
+                if not self._satisfies_parameter_constraints(params):
+                    print(f"??  Skipping experimental point {i+1}: violates parameter constraints after discretization ({params})")
+                    continue
 
                 actual_objectives = self.Y_data[i]
                 objective_outputs = {}
@@ -1124,10 +1202,21 @@ class BayesianOptimizer:
                     distance = 1.0
 
                 objective_uncertainties = self._extract_uploaded_objective_uncertainties(i)
+                distance_sem = None
+                if self.evaluator is not None:
+                    try:
+                        distance_sem = self.evaluator.calculate_distance_uncertainty(
+                            actual_objectives,
+                            objective_uncertainties,
+                            include_direct_objectives=not self.uses_direct_objectives,
+                        )
+                    except Exception:
+                        distance_sem = None
                 raw_data = self._build_raw_data(
                     distance=float(distance),
                     objective_outputs=objective_outputs,
                     objective_uncertainties=objective_uncertainties,
+                    distance_sem=distance_sem,
                 )
 
                 _, trial_index = self.ax_client.attach_trial(params)
@@ -1170,6 +1259,30 @@ class BayesianOptimizer:
         else:
             print("? No valid experimental data points could be added")
             self.best_overall_distance = float('inf')
+
+    def _satisfies_parameter_constraints(self, parameters: Dict[str, Any]) -> bool:
+        """Return True when a parameter set satisfies all configured linear constraints."""
+        constraints = getattr(self.config, 'parameter_constraints', []) or []
+        if not constraints:
+            return True
+
+        numeric_scope: Dict[str, float] = {}
+        for k, v in parameters.items():
+            if isinstance(v, (int, float, np.floating)):
+                numeric_scope[k] = float(v)
+
+        for constraint in constraints:
+            expr = str(getattr(constraint, 'expression', '') or '').strip()
+            if not expr:
+                continue
+            try:
+                if not bool(eval(expr, {"__builtins__": {}}, numeric_scope)):
+                    return False
+            except Exception:
+                # If the expression cannot be evaluated here, defer to Ax validation.
+                continue
+
+        return True
     def _create_generation_strategy(self) -> AxGenerationStrategy:
         """Create generation strategy with cross-version Ax model resolution."""
         steps: List[GenerationStep] = []
@@ -1506,6 +1619,14 @@ class BayesianOptimizer:
                     distance=float(distance),
                     objective_outputs=objective_outputs,
                     objective_uncertainties=uncertainties,
+                    distance_sem=(
+                        self.evaluator.calculate_distance_uncertainty(
+                            measured_array,
+                            uncertainties,
+                            include_direct_objectives=not self.uses_direct_objectives,
+                        )
+                        if self.evaluator is not None else None
+                    ),
                 )
                 metadata = {
                     "candidate_modified": candidate_modified,
@@ -1541,6 +1662,14 @@ class BayesianOptimizer:
                 distance=float(distance),
                 objective_outputs=objective_outputs,
                 objective_uncertainties=uncertainties,
+                distance_sem=(
+                    self.evaluator.calculate_distance_uncertainty(
+                        prediction_for_distance,
+                        uncertainties,
+                        include_direct_objectives=not self.uses_direct_objectives,
+                    )
+                    if self.evaluator is not None else None
+                ),
             )
 
             return distance, uncertainties, raw_data, objective_outputs, prediction_for_distance, {
@@ -1668,15 +1797,63 @@ class BayesianOptimizer:
     def _process_batch(self, batch_idx: int, progress_callback=None) -> List[Dict]:
         """Process a single batch of candidates"""
         batch_candidates = []
+        pending_effective_candidates: List[Dict[str, Any]] = []
         batch_size = 1 if self.config.optimization_mode == OptimizationMode.SEQUENTIAL else self.config.batch_size
         print(f"Generating {batch_size} candidates for batch {batch_idx + 1}")
         for i in range(batch_size):
-            try:
-                parameters, trial_index = self.ax_client.get_next_trial()
+            generated = False
+            max_attempts = 10 if self.current_adaptive_bounds else 25
+            for attempt in range(max_attempts):
+                try:
+                    parameters, trial_index = self.ax_client.get_next_trial()
+                except Exception as e:
+                    print(f"Error generating candidate {i+1}: {e}")
+                    break
+
+                effective_parameters = self._normalize_candidate_parameters(parameters)
+                if self._is_duplicate_candidate(parameters, pending_candidates=pending_effective_candidates):
+                    duplicate_note = ""
+                    if not self._parameter_dicts_equal(parameters, effective_parameters):
+                        duplicate_note = f" -> effective {effective_parameters}"
+                    print(
+                        f"Skipping duplicate candidate from Ax (attempt {attempt+1}/{max_attempts}): "
+                        f"{parameters}{duplicate_note}"
+                    )
+                    try:
+                        if hasattr(self.ax_client, "abandon_trial"):
+                            self.ax_client.abandon_trial(
+                                trial_index=trial_index,
+                                reason="duplicate_candidate",
+                            )
+                        else:
+                            self.ax_client.log_trial_failure(trial_index=trial_index)
+                    except Exception as dup_err:
+                        print(f"Warning: failed to mark duplicate trial {trial_index}: {dup_err}")
+                    continue
+
                 batch_candidates.append((parameters, trial_index))
-            except Exception as e:
-                print(f"Error generating candidate {i+1}: {e}")
-                continue
+                pending_effective_candidates.append(effective_parameters)
+                generated = True
+                break
+
+            if not generated:
+                fallback_parameters = self._sample_unique_fallback_candidate(
+                    pending_candidates=pending_effective_candidates
+                )
+                if fallback_parameters is not None:
+                    try:
+                        _, fallback_trial_index = self.ax_client.attach_trial(fallback_parameters)
+                        print(
+                            f"Using fallback unique candidate {i+1} after repeated duplicates: "
+                            f"{fallback_parameters}"
+                        )
+                        batch_candidates.append((fallback_parameters, fallback_trial_index))
+                        pending_effective_candidates.append(fallback_parameters)
+                        generated = True
+                    except Exception as attach_err:
+                        print(f"Fallback candidate attach failed for candidate {i+1}: {attach_err}")
+                if not generated:
+                    print(f"Could not generate unique candidate {i+1} after {max_attempts} attempts")
         if not batch_candidates:
             print("No candidates generated in this batch")
             return []

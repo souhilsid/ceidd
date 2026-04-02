@@ -25,6 +25,8 @@ np.int = int
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C, WhiteKernel
+from sklearn.linear_model import LinearRegression
+from sklearn.neural_network import MLPRegressor
 from sklearn.svm import SVR
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -484,6 +486,28 @@ class ModelRegistry:
                 'cache_size': 1000
             }
         )
+
+        # Multi-layer perceptron
+        self.register_model(
+            "mlp",
+            MLPRegressor,
+            {
+                'hidden_layer_sizes': (100, 50),
+                'activation': 'relu',
+                'solver': 'adam',
+                'alpha': 0.0001,
+                'learning_rate': 'adaptive',
+                'max_iter': 1000,
+                'random_state': 42,
+            }
+        )
+
+        # Linear regression
+        self.register_model(
+            "linear_regression",
+            LinearRegression,
+            {}
+        )
         
         # GAM - Use custom wrapper to handle compatibility issues
         self.register_model(
@@ -551,6 +575,14 @@ class ModelRegistry:
             return Pipeline([
                 ("scaler", StandardScaler()), 
                 ("model", svr)
+            ])
+
+        elif model_type in {"mlp", "linear_regression"}:
+            # Both models are more stable with standardized inputs.
+            base_model = model_class(**params)
+            return Pipeline([
+                ("scaler", StandardScaler()),
+                ("model", base_model)
             ])
         
         elif model_type == "gam":

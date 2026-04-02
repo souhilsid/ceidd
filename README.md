@@ -104,6 +104,8 @@ CEID supports these evaluator types:
 
 ## 4.2 Install
 
+Windows (PowerShell):
+
 ```powershell
 cd CEID
 python -m venv .venv
@@ -111,6 +113,20 @@ python -m venv .venv
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
+
+macOS / Linux (bash or zsh):
+
+```bash
+cd CEID
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -r requirements-macos.txt
+```
+
+Notes:
+- `requirements.txt` is the exact pinned dependency source of truth for CEID.
+- `requirements-macos.txt` currently points to the same exact pinned set and exists only to make macOS/Linux setup explicit.
 
 ## 4.3 Run
 
@@ -164,6 +180,19 @@ Entry point:
 
 Recommended environment variables:
 - `CEID_STORAGE_DIR=/tmp/ceid`
+
+Recommended Streamlit secrets for embedded LiveKit SDL:
+
+```toml
+CEID_STORAGE_DIR = "/tmp/ceid"
+SDL_EMBEDDED_LIVEKIT_URL = "wss://your-livekit-host"
+SDL_EMBEDDED_LIVEKIT_ROOM = "dt"
+SDL_EMBEDDED_LIVEKIT_TOPIC = "twin"
+SDL_EMBEDDED_LIVEKIT_TOKEN = "<livekit-jwt-for-sdl-agent>"
+SDL_EMBEDDED_UNITY_DEST_IDENTITY = "unity"
+```
+
+The app also accepts legacy aliases (`LIVEKIT_URL`, `LIVEKIT_ROOM`, `LIVEKIT_TOPIC`, `SDL_LIVEKIT_TOKEN`, `UNITY_DEST_IDENTITY`) but `SDL_EMBEDDED_*` is preferred.
 
 Hosted Streamlit is suitable for:
 - virtual evaluator workflows
@@ -235,6 +264,7 @@ Each objective:
 - `weight`
 - `target_range` (for `target_range`)
 - `target_value` + `tolerance` (for `target_value`)
+- optional `tolerance_mode`: `absolute | percent` for `target_value`
 
 ### 6.4 Parameter constraints
 Constraint types:
@@ -360,6 +390,16 @@ In CEID Setup -> Evaluators -> Self-driving labs:
 
 Note: embedded mode imports `sdl_agent.EmbeddedRYBSDL`; ensure that package/module is available in your workspace.
 
+For standalone RYB SDL execution with LiveKit transport:
+
+```powershell
+python RYB_SDL.py --protocol http --unity-enable --unity-transport livekit --livekit-url <wss-url> --livekit-room <room> --livekit-topic <topic> --sdl-livekit-token <jwt>
+```
+
+Environment aliases accepted by `RYB_SDL.py`:
+- Preferred: `SDL_EMBEDDED_LIVEKIT_URL`, `SDL_EMBEDDED_LIVEKIT_ROOM`, `SDL_EMBEDDED_LIVEKIT_TOPIC`, `SDL_EMBEDDED_LIVEKIT_TOKEN`, `SDL_EMBEDDED_UNITY_DEST_IDENTITY`
+- Legacy: `LIVEKIT_URL`, `LIVEKIT_ROOM`, `LIVEKIT_TOPIC`, `SDL_LIVEKIT_TOKEN`, `UNITY_DEST_IDENTITY`
+
 ## 9. RYB_SDL Agent Capabilities (This Repo)
 
 `RYB_SDL.py` provides:
@@ -407,11 +447,27 @@ You can initialize/repair DB and browse saved runs directly in UI.
 
 ## 12. requirements.txt Scope
 
-`requirements.txt` now includes:
-- Core CEID runtime dependencies
-- SDL connector dependencies
-- Optional model/interop packages used by advanced/custom features
-- Hardware-specific optional package marker for FTDI relay tooling
+`requirements.txt` is fully pinned and is the source of truth for the supported CEID Python environment.
+
+Exact package set:
+- `streamlit==1.41.1`
+- `pandas==2.2.3`
+- `numpy==1.26.4`
+- `matplotlib==3.9.2`
+- `plotly==5.24.1`
+- `PyYAML==6.0.3`
+- `ax-platform==0.4.3`
+- `scikit-learn==1.8.0`
+- `xgboost==3.1.2`
+- `optuna==4.6.0`
+- `skops==0.13.0`
+- `onnxruntime==1.23.2`
+- `requests==2.32.3`
+- `paho-mqtt==2.1.0`
+- `pyserial==3.5`
+- `SQLAlchemy==1.4.52`
+
+`requirements-macos.txt` currently reuses this exact pinned set.
 
 ## 13. Troubleshooting
 

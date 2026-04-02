@@ -1,4 +1,4 @@
-﻿# app.py - COMPLETE FIXED VERSION WITH DUPLICATE UPLOAD PROTECTION
+# app.py - COMPLETE FIXED VERSION WITH DUPLICATE UPLOAD PROTECTION
 
 import streamlit as st
 import pandas as pd
@@ -38,6 +38,7 @@ from core.config import (
     OptimizationConfig,
     EvaluatorType,
     OptimizationMode,
+    OptimizationRunMode,
 )
 from core.models import ModelRegistry, ModelFactory, CustomModelLoader
 from core.evaluators import GeneralizedEvaluator, EvaluationMetrics, OPTUNA_AVAILABLE
@@ -50,6 +51,8 @@ from utils.reporting import export_run_artifacts
 from utils.checkpoint_csv import export_checkpoint_csvs
 from utils.database_manager import ExperimentDatabaseManager
 from utils.runtime import get_runtime_paths, persist_uploaded_bytes
+
+OPTIMIZER_RUNTIME_VERSION = "2026-04-02-adaptive-dedup-v2"
 
 class BOPlatform:
     def __init__(self):
@@ -111,6 +114,8 @@ class BOPlatform:
             st.session_state.checkpoint_info = None
         if 'loaded_checkpoint' not in st.session_state:
             st.session_state.loaded_checkpoint = None
+        if 'optimizer_runtime_version' not in st.session_state:
+            st.session_state.optimizer_runtime_version = None
         if 'run_status' not in st.session_state:
             st.session_state.run_status = 'idle'
         if 'evaluator_category' not in st.session_state:
@@ -125,6 +130,8 @@ class BOPlatform:
             st.session_state.sdl_connector = None
         if 'optimization_mode' not in st.session_state:
             st.session_state.optimization_mode = OptimizationMode.BATCH.value
+        if 'optimization_run_mode' not in st.session_state:
+            st.session_state.optimization_run_mode = OptimizationRunMode.MANUAL_CONTINUE.value
         if 'task_parameter_name' not in st.session_state:
             st.session_state.task_parameter_name = None
         if 'acquisition_function_select' not in st.session_state:
@@ -176,7 +183,7 @@ class BOPlatform:
             st.session_state.distance_normalization_config = {
                 "enabled": True,
                 "clip_component": 10.0,
-                "normalize_weight_norm": True,
+                "normalize_weight_norm": False,
             }
         if 'export_root_dir' not in st.session_state:
             st.session_state.export_root_dir = str(self.runtime_paths.exports_dir)
@@ -200,17 +207,28 @@ class BOPlatform:
             "random_forest": "Random Forest",
             "gaussian_process": "Gaussian Process",
             "xgboost": "XGBoost",
-            "svm": "SVM",
+            "svm": "SVR",
+            "mlp": "MLP",
+            "linear_regression": "Linear Regression",
             "gam": "GAM",
         }
+        default_enabled = {"random_forest", "gaussian_process", "xgboost"}
         defaults: List[Dict[str, Any]] = []
-        for model_type in ["random_forest", "gaussian_process", "xgboost"]:
+        for model_type in [
+            "random_forest",
+            "gaussian_process",
+            "xgboost",
+            "svm",
+            "mlp",
+            "linear_regression",
+            "gam",
+        ]:
             if model_type in available:
                 defaults.append(
                     {
                         "name": presets.get(model_type, model_type),
                         "type": model_type,
-                        "enabled": True,
+                        "enabled": model_type in default_enabled,
                         "hyperparameters": {},
                     }
                 )
@@ -505,7 +523,7 @@ class BOPlatform:
         
         elif st.session_state.get('uploaded_data') is not None:
             df = st.session_state.uploaded_data
-            st.info(f"Using previously uploaded dataset: {df.shape[0]} rows Ã— {df.shape[1]} columns")
+            st.info(f"Using previously uploaded dataset: {df.shape[0]} rows × {df.shape[1]} columns")
             if st.session_state.get('uploaded_dataset_path'):
                 st.caption(f"Stored dataset copy: {st.session_state.uploaded_dataset_path}")
             st.dataframe(df.head(5))
@@ -567,7 +585,7 @@ class BOPlatform:
         return {
             "enabled": True,
             "clip_component": 10.0,
-            "normalize_weight_norm": True,
+            "normalize_weight_norm": False,
         }
 
     def _resolve_distance_normalization_config(
@@ -729,7 +747,9 @@ class BOPlatform:
             'target_range': obj.target_range,
             'target_value': obj.target_value,
             'tolerance': obj.tolerance,
-            'weight': obj.weight
+            'tolerance_mode': getattr(obj, 'tolerance_mode', 'absolute'),
+            'weight': obj.weight,
+            'weight_percent': getattr(obj, 'weight_percent', float(obj.weight) * 100.0),
         }
         st.session_state.objectives.append(obj_dict)
     
@@ -956,7 +976,6 @@ class BOPlatform:
                     'distance_normalization_config': {
                         "enabled": True,
                         "clip_component": 10.0,
-                        "normalize_weight_norm": True,
                     },
                 }
             
@@ -1371,7 +1390,7 @@ class BOPlatform:
                         constraint['expression'] = current_expression
                         
                         # Show info about composition constraint
-                        st.info(f"â„¹ï¸ Composition constraint will be enforced as: {param_sum} <= {st.session_state[total_key]} AND {param_sum} >= {st.session_state[total_key]}")
+                        st.info(f"ℹ️ Composition constraint will be enforced as: {param_sum} <= {st.session_state[total_key]} AND {param_sum} >= {st.session_state[total_key]}")
                     else:
                         st.warning("Select at least 2 parameters for composition constraint")
                         constraint['expression'] = ""
@@ -1419,7 +1438,7 @@ class BOPlatform:
                 'weight': 1.0
             })
     
-    # Display objectives
+     # Display objectives
      objectives_to_remove = []
      for i, obj in enumerate(st.session_state.objectives):
         with st.expander(f"Objective: {obj['name']}", expanded=True):
@@ -1493,30 +1512,62 @@ class BOPlatform:
                 obj.pop('target_value', None)
                 obj.pop('tolerance', None)
             elif obj_type == ObjectiveType.TARGET_VALUE.value:
-                obj['target_value'] = st.number_input(
+                target_value = st.number_input(
                     "Target Value",
                     value=float(obj.get('target_value', 0.0)),
                     key=f"target_value_{i}",
                 )
-                obj['tolerance'] = st.number_input(
-                    "Tolerance",
+                existing_mode = str(obj.get('tolerance_mode', 'absolute') or 'absolute').lower()
+                existing_tolerance = float(obj.get('tolerance', 0.0) or 0.0)
+                if existing_mode == 'percent':
+                    tolerance_percent_default = existing_tolerance
+                else:
+                    tolerance_percent_default = (
+                        (existing_tolerance / abs(target_value) * 100.0)
+                        if abs(float(target_value)) > 1e-12 else existing_tolerance * 100.0
+                    )
+
+                tolerance_percent = st.number_input(
+                    "Tolerance (%)",
                     min_value=0.0,
-                    value=float(obj.get('tolerance', 0.0)),
-                    key=f"tolerance_{i}",
+                    value=float(tolerance_percent_default),
+                    step=0.1,
+                    format="%.3f",
+                    key=f"tolerance_pct_{i}",
+                    help="Allowed percent band around the target before penalty starts. Effective absolute tolerance = |target value| * tolerance / 100.",
+                )
+                obj['target_value'] = float(target_value)
+                obj['tolerance'] = float(tolerance_percent)
+                obj['tolerance_mode'] = 'percent'
+                effective_abs_tolerance = abs(float(target_value)) * float(tolerance_percent) / 100.0
+                st.caption(
+                    f"Current tolerance band: {float(target_value):.4f} +/- {effective_abs_tolerance:.4f} units"
                 )
                 obj.pop('target_range', None)
             else:
                 obj.pop('target_range', None)
                 obj.pop('target_value', None)
                 obj.pop('tolerance', None)
+                obj.pop('tolerance_mode', None)
                 st.caption("No target settings required for minimize/maximize objectives.")
             
-            # Weight
-            obj['weight'] = st.slider("Weight", 0.1, 2.0, value=float(obj.get('weight', 1.0)), key=f"weight_{i}")
+            obj['weight'] = float(st.slider(
+                "Weight",
+                min_value=0.0,
+                max_value=2.0,
+                value=float(obj.get('weight', 1.0)),
+                step=0.1,
+                key=f"weight_{i}",
+                help="Per-objective multiplier used in distance aggregation.",
+            ))
     
     # Remove marked objectives
      for i in sorted(objectives_to_remove, reverse=True):
         st.session_state.objectives.pop(i)
+
+     if st.session_state.objectives:
+        for obj in st.session_state.objectives:
+            obj['weight'] = max(0.0, float(obj.get('weight', 1.0)))
     
         # Evaluator selection
      st.subheader("Evaluators")
@@ -1548,6 +1599,17 @@ class BOPlatform:
      if evaluator_option == "Self-driving labs":
         st.info("Configure connection to your lab hardware. Model configuration is disabled in SDL mode.")
         sdl_settings = st.session_state.get('sdl_settings', SDLSettings().__dict__).copy()
+
+        def _secret_value(*keys: str, default: str = "") -> str:
+            try:
+                for key in keys:
+                    value = st.secrets.get(key, None)
+                    if value not in [None, ""]:
+                        return str(value)
+            except Exception:
+                pass
+            return default
+
         protocol_choices = [
             ("MQTT", "mqtt"),
             ("HTTP", "http"),
@@ -1676,36 +1738,45 @@ class BOPlatform:
 
             unity_transport = str(sdl_settings.get('embedded_unity_transport', 'livekit')).lower()
             if unity_transport == "livekit":
+                default_livekit_url = str(sdl_settings.get('embedded_livekit_url') or _secret_value("SDL_EMBEDDED_LIVEKIT_URL", "LIVEKIT_URL", default='wss://digital-twin-e1hn80jk.livekit.cloud'))
+                default_livekit_room = str(sdl_settings.get('embedded_livekit_room') or _secret_value("SDL_EMBEDDED_LIVEKIT_ROOM", "LIVEKIT_ROOM", default='dt'))
+                default_livekit_topic = str(sdl_settings.get('embedded_livekit_topic') or _secret_value("SDL_EMBEDDED_LIVEKIT_TOPIC", "LIVEKIT_TOPIC", default='twin'))
+                default_livekit_token = str(sdl_settings.get('embedded_sdl_livekit_token') or _secret_value("SDL_EMBEDDED_LIVEKIT_TOKEN", "SDL_LIVEKIT_TOKEN", default=''))
+                default_unity_dest = str(sdl_settings.get('embedded_unity_dest_identity') or _secret_value("SDL_EMBEDDED_UNITY_DEST_IDENTITY", "UNITY_DEST_IDENTITY", default='unity'))
+
                 lk_col1, lk_col2 = st.columns(2)
                 with lk_col1:
                     sdl_settings['embedded_livekit_url'] = st.text_input(
                         "LiveKit URL",
-                        value=sdl_settings.get('embedded_livekit_url', 'wss://digital-twin-e1hn80jk.livekit.cloud'),
+                        value=default_livekit_url,
                         key="sdl_embedded_livekit_url",
                     )
                     sdl_settings['embedded_livekit_room'] = st.text_input(
                         "LiveKit room",
-                        value=sdl_settings.get('embedded_livekit_room', 'dt'),
+                        value=default_livekit_room,
                         key="sdl_embedded_livekit_room",
                     )
                     sdl_settings['embedded_livekit_topic'] = st.text_input(
                         "LiveKit topic",
-                        value=sdl_settings.get('embedded_livekit_topic', 'twin'),
+                        value=default_livekit_topic,
                         key="sdl_embedded_livekit_topic",
                     )
                 with lk_col2:
                     sdl_settings['embedded_sdl_livekit_token'] = st.text_input(
                         "SDL LiveKit token",
-                        value=sdl_settings.get('embedded_sdl_livekit_token', ''),
+                        value=default_livekit_token,
                         type="password",
                         key="sdl_embedded_livekit_token",
-                        help="If empty, CEID will use SDL_LIVEKIT_TOKEN from environment.",
+                        help="If empty, CEID tries SDL_EMBEDDED_LIVEKIT_TOKEN, then SDL_LIVEKIT_TOKEN from environment or Streamlit secrets.",
                     )
                     sdl_settings['embedded_unity_dest_identity'] = st.text_input(
                         "Unity destination identity",
-                        value=sdl_settings.get('embedded_unity_dest_identity', 'unity'),
+                        value=default_unity_dest,
                         key="sdl_embedded_unity_dest_identity",
                     )
+
+                if not str(sdl_settings.get('embedded_sdl_livekit_token', '')).strip():
+                    st.warning("LiveKit transport selected but no token is configured. Add SDL_EMBEDDED_LIVEKIT_TOKEN (or SDL_LIVEKIT_TOKEN) in Streamlit secrets or environment.")
             elif unity_transport == "tcp":
                 tcp_col1, tcp_col2 = st.columns(2)
                 with tcp_col1:
@@ -1722,8 +1793,9 @@ class BOPlatform:
                         key="sdl_embedded_unity_port",
                     )
 
-        # Clamp legacy/low timeouts to a sensible default (5s) but allow user to lower if needed
-        current_timeout = float(sdl_settings.get('response_timeout', 20.0))
+        # Clamp legacy/low timeouts to a sensible default but allow user to lower if needed.
+        # Hardware/SDL loops frequently exceed 20s, so default to 120s unless user overrides.
+        current_timeout = float(sdl_settings.get('response_timeout', 120.0))
         if current_timeout < 0.5:
             current_timeout = 5.0
         sdl_settings['response_timeout'] = st.number_input(
@@ -1733,6 +1805,7 @@ class BOPlatform:
             step=0.5, 
             key="sdl_response_timeout"
         )
+        st.caption("For TCP/real hardware, set timeout longer than one full mix + measure cycle.")
         st.session_state.sdl_settings = sdl_settings
 
         if st.button("Connect & test SDL", use_container_width=True, key="sdl_connect_test"):
@@ -1788,6 +1861,20 @@ class BOPlatform:
             st.warning(
                 f"Removed unavailable model types from configuration: {', '.join(removed_models)}."
             )
+
+        # Ensure newly available built-in models appear in the UI for existing sessions.
+        existing_custom_models = [m for m in st.session_state.models if m.get('type') == 'custom_model']
+        existing_builtin_by_type = {
+            m.get('type'): m
+            for m in st.session_state.models
+            if m.get('type') != 'custom_model'
+        }
+        merged_builtin_models = []
+        for template in self._default_builtin_models():
+            model_type = template.get("type")
+            merged_builtin_models.append(existing_builtin_by_type.pop(model_type, template.copy()))
+        merged_builtin_models.extend(existing_builtin_by_type.values())
+        st.session_state.models = merged_builtin_models + existing_custom_models
 
         # Keep at least one model available.
         if not st.session_state.models:
@@ -1966,13 +2053,26 @@ class BOPlatform:
      col1, col2 = st.columns(2)
      with col1:
         optimization_mode_label = st.radio(
-            "Execution mode",
+            "Optimization mode",
             options=["Batch", "Sequential"],
             index=0 if st.session_state.get('optimization_mode', OptimizationMode.BATCH.value) == OptimizationMode.BATCH.value else 1,
             key="optimization_mode_radio"
         )
         is_sequential_mode = optimization_mode_label == "Sequential"
         st.session_state.optimization_mode = OptimizationMode.SEQUENTIAL.value if is_sequential_mode else OptimizationMode.BATCH.value
+
+        run_mode_label = st.radio(
+            "Run control",
+            options=["Manual Continue", "Continuous"],
+            index=0 if st.session_state.get('optimization_run_mode', OptimizationRunMode.MANUAL_CONTINUE.value) == OptimizationRunMode.MANUAL_CONTINUE.value else 1,
+            key="optimization_run_mode_radio",
+            help="Manual Continue runs one batch or iteration per click. Continuous runs all remaining batches or iterations after Start/Resume."
+        )
+        st.session_state.optimization_run_mode = (
+            OptimizationRunMode.CONTINUOUS.value
+            if run_mode_label == "Continuous"
+            else OptimizationRunMode.MANUAL_CONTINUE.value
+        )
 
         batch_iterations = st.number_input(
             "Iterations" if is_sequential_mode else "Batch Iterations", 
@@ -2516,6 +2616,12 @@ class BOPlatform:
             ["std", "stdev", "sigma"],
         )
 
+        if target_count > 0 and uncertainty_config.get("enabled", True):
+            st.caption(
+                "For target-only objectives, CEID sends one distance metric to Ax and propagates per-objective SEM into distance uncertainty using the weighted distance geometry instead of averaging SEMs. "
+                "Approximation: d = sqrt(sum(c_i^2)), sigma_d ~= sqrt(sum((c_i / d)^2 * sigma_{c_i}^2))."
+            )
+
         if target_count > 0:
             st.markdown("**Distance Normalization Configuration**")
             dn_col1, dn_col2, dn_col3 = st.columns(3)
@@ -2552,7 +2658,7 @@ class BOPlatform:
                     )
                 else:
                     st.caption(
-                        "Target objectives already use internal target scaling."
+                        "Target objectives already use internal target scaling. Target-value tolerances are configured as percentages of the target."
                     )
         else:
             st.info(
@@ -2613,6 +2719,7 @@ class BOPlatform:
                 'models': st.session_state.models,
                 'evaluator_type': st.session_state.get('evaluator_type', EvaluatorType.VIRTUAL.value),
                 'optimization_mode': st.session_state.get('optimization_mode', OptimizationMode.BATCH.value),
+                'run_mode': st.session_state.get('optimization_run_mode', OptimizationRunMode.MANUAL_CONTINUE.value),
                 'sdl_settings': st.session_state.get('sdl_settings', {}),
                 'task_parameter_name': st.session_state.get('task_parameter_name'),
                 'parameter_constraints': st.session_state.get('parameter_constraints', []),  # NEW
@@ -2649,6 +2756,7 @@ class BOPlatform:
                 "Parameter Constraints": len(config.parameter_constraints),  # NEW
                 "Evaluator": config.evaluator_type.value if hasattr(config.evaluator_type, 'value') else config.evaluator_type,
                 "Mode": config.optimization_mode.value if hasattr(config.optimization_mode, 'value') else config.optimization_mode,
+                "Run Control": config.run_mode.value if hasattr(config.run_mode, 'value') else config.run_mode,
                 "Enabled Models": len([m for m in config.models if m.enabled]),
                 "Model Types": ", ".join(list(set([m.type for m in config.models if m.enabled]))),
                 "Hyperparameter Tuning": "Enabled" if (enable_hyperparameter_tuning and not has_custom_models and OPTUNA_AVAILABLE) else "Disabled",
@@ -2792,13 +2900,20 @@ class BOPlatform:
         )
 
         effective_total_batches = config.batch_iterations if config.optimization_mode == OptimizationMode.BATCH else max(config.max_iterations, config.batch_iterations)
+        manual_continue_mode = getattr(config, 'run_mode', OptimizationRunMode.MANUAL_CONTINUE) == OptimizationRunMode.MANUAL_CONTINUE
+        resume_label = "Resume / Next Batch" if manual_continue_mode else "Resume Continuous Run"
 
 
         st.subheader("Optimization Controls")
 
+        if manual_continue_mode:
+            st.caption("Manual Continue mode is active: each Start or Resume click runs exactly one batch or sequential iteration.")
+        else:
+            st.caption("Continuous mode is active: Start or Resume runs all remaining batches or sequential iterations until completion.")
+
         control_cols = st.columns([1.3, 1.2, 1.1, 1.1, 1])
         start_clicked = control_cols[0].button("Start Fresh", use_container_width=True, type="primary", key="start_fresh_btn", disabled=False)
-        resume_clicked = control_cols[1].button("Resume / Next Batch", use_container_width=True, key="resume_btn", disabled=False)
+        resume_clicked = control_cols[1].button(resume_label, use_container_width=True, key="resume_btn", disabled=False)
         pause_clicked = control_cols[2].button("Pause & Save", use_container_width=True, key="pause_btn", disabled=('optimizer' not in st.session_state))
         stop_clicked = control_cols[3].button("Stop & Save", use_container_width=True, key="stop_btn", disabled=('optimizer' not in st.session_state))
         save_clicked = control_cols[4].button("Save", use_container_width=True, key="save_btn", disabled=('optimizer' not in st.session_state))
@@ -2869,6 +2984,16 @@ class BOPlatform:
                 resume_state = None
 
         st.session_state.optimization_data = {"X": X, "Y": Y, "Y_sem": Y_sem}
+        optimizer_version_mismatch = (
+            st.session_state.get('optimizer') is not None
+            and resume_state is None
+            and st.session_state.get('optimizer_runtime_version') not in [None, OPTIMIZER_RUNTIME_VERSION]
+        )
+        if optimizer_version_mismatch:
+            st.warning(
+                "The in-memory optimizer was created with older code and cannot safely be resumed. "
+                "Use Start Fresh, or restart Streamlit and resume from a saved checkpoint."
+            )
 
         def _reset_progress_state(start_batch=0, best_distance=float('inf'), keep_history=False):
             total_batches = max(effective_total_batches, start_batch)
@@ -2891,19 +3016,35 @@ class BOPlatform:
                 'objective_history': existing.get('objective_history', {}) if keep_history else {},
                 'model_performance': existing.get('model_performance', {}) if keep_history else {},
                 'model_performance_history': existing.get('model_performance_history', []) if keep_history else [],
+                'run_mode': config.run_mode.value if hasattr(config.run_mode, 'value') else config.run_mode,
             }
 
         if start_clicked:
-            for key in ['optimization_result', 'evaluator', 'optimizer']:
+            for key in ['optimization_result', 'evaluator', 'optimizer', 'optimizer_runtime_version']:
                 if key in st.session_state:
                     del st.session_state[key]
             st.session_state.loaded_checkpoint = None
             st.session_state.checkpoint_info = None
             _reset_progress_state(0, float('inf'), keep_history=False)
             st.session_state.run_status = 'running'
-            self._run_optimization(config, X, Y, Y_sem, resume_state=None, single_batch=True, sdl_connector=sdl_connector, reset_progress=True)
+            self._run_optimization(
+                config,
+                X,
+                Y,
+                Y_sem,
+                resume_state=None,
+                single_batch=manual_continue_mode,
+                sdl_connector=sdl_connector,
+                reset_progress=True,
+            )
 
         if resume_clicked:
+            if optimizer_version_mismatch and resume_state is None:
+                st.error(
+                    "Resume is blocked because the current optimizer object was created before the latest code update. "
+                    "Restart Streamlit and load a checkpoint, or start a fresh run."
+                )
+                return
             st.session_state.run_status = 'running'
             start_from = 0
             best_distance = float('inf')
@@ -2917,7 +3058,16 @@ class BOPlatform:
                 st.session_state.optimizer.config = config
             # keep prior histories when resuming
             _reset_progress_state(start_from, best_distance, keep_history=True)
-            self._run_optimization(config, X, Y, Y_sem, resume_state=resume_state, single_batch=True, sdl_connector=sdl_connector, reset_progress=False)
+            self._run_optimization(
+                config,
+                X,
+                Y,
+                Y_sem,
+                resume_state=resume_state,
+                single_batch=manual_continue_mode,
+                sdl_connector=sdl_connector,
+                reset_progress=False,
+            )
 
         if save_clicked or pause_clicked or stop_clicked:
             if 'optimizer' in st.session_state:
@@ -2952,7 +3102,10 @@ class BOPlatform:
                     if 'optimization_progress' in st.session_state:
                         st.session_state.optimization_progress['status'] = 'paused'
         if st.session_state.get('run_status') == "paused":
-            st.info("Optimization paused. Click Resume to run the next batch.")
+            if manual_continue_mode:
+                st.info("Optimization paused. Click Resume to run the next batch.")
+            else:
+                st.info("Optimization paused. Click Resume to continue the remaining optimization run.")
         if st.session_state.get('run_status') == "stopped":
             st.info("Optimization stopped. You can Resume from the saved checkpoint later.")
 
@@ -2964,7 +3117,7 @@ class BOPlatform:
 
 
     def _run_optimization(self, config, X, Y, Y_sem=None, resume_state=None, single_batch=True, sdl_connector=None, reset_progress=True):
-        """Run optimization with checkpoint-aware updates (one batch at a time)."""
+        """Run optimization with checkpoint-aware updates."""
         try:
             progress_container = st.empty()
             direct_objectives_present = any(
@@ -2995,6 +3148,7 @@ class BOPlatform:
                     'objective_history': {} if reset_progress else st.session_state.optimization_progress.get('objective_history', {}),
                     'model_performance': {} if reset_progress else st.session_state.optimization_progress.get('model_performance', {}),
                     'model_performance_history': [] if reset_progress else st.session_state.optimization_progress.get('model_performance_history', []),
+                    'run_mode': config.run_mode.value if hasattr(config.run_mode, 'value') else config.run_mode,
                 }
 
             start_batch = 0
@@ -3105,6 +3259,7 @@ class BOPlatform:
                 )
                 st.session_state.evaluator = self.evaluator
                 st.session_state.optimizer = self.optimizer
+                st.session_state.optimizer_runtime_version = OPTIMIZER_RUNTIME_VERSION
             else:
                 self.optimizer = reuse_optimizer
                 self.optimizer.config = config
@@ -3132,6 +3287,7 @@ class BOPlatform:
                     self.evaluator.set_distance_normalization_config(
                         getattr(config, "distance_normalization_config", None)
                     )
+                st.session_state.optimizer_runtime_version = OPTIMIZER_RUNTIME_VERSION
 
             st.session_state.run_status = 'running'
             st.session_state.optimization_progress['status'] = 'running'
@@ -3223,6 +3379,7 @@ class BOPlatform:
             'experiment_name': config.experiment_name,
             'evaluator_type': config.evaluator_type.value if hasattr(config.evaluator_type, 'value') else config.evaluator_type,
             'optimization_mode': config.optimization_mode.value if hasattr(config.optimization_mode, 'value') else config.optimization_mode,
+            'run_mode': config.run_mode.value if hasattr(config.run_mode, 'value') else config.run_mode,
             'sdl_settings': config.sdl_settings,
             'task_parameter_name': config.task_parameter_name,
             'parameters': [
@@ -3241,6 +3398,7 @@ class BOPlatform:
                     'target_range': o.target_range,
                     'target_value': o.target_value,
                     'tolerance': o.tolerance,
+                    'tolerance_mode': getattr(o, 'tolerance_mode', 'absolute'),
                     'weight': o.weight
                 } for o in config.objectives
             ],
@@ -3267,6 +3425,7 @@ class BOPlatform:
                 'batch_size': config.batch_size,
                 'max_iterations': config.max_iterations,
                 'optimization_mode': config.optimization_mode.value if hasattr(config.optimization_mode, 'value') else config.optimization_mode,
+                'run_mode': config.run_mode.value if hasattr(config.run_mode, 'value') else config.run_mode,
                 'random_seed': config.random_seed,
                 'n_initial_points': config.n_initial_points,
                 'generation_strategy': config.generation_strategy.value if hasattr(config.generation_strategy, 'value') else config.generation_strategy,
@@ -3286,7 +3445,20 @@ class BOPlatform:
 
     def _config_from_dict(self, cfg_dict: Dict[str, Any]) -> OptimizationConfig:
         params = [ParameterConfig(**p) for p in cfg_dict.get('parameters', [])]
-        objectives = [ObjectiveConfig(**o) for o in cfg_dict.get('objectives', [])]
+        allowed_obj_keys = {
+            'name',
+            'type',
+            'target_range',
+            'target_value',
+            'tolerance',
+            'tolerance_mode',
+            'weight',
+            'weight_percent',
+        }
+        objectives = [
+            ObjectiveConfig(**{k: v for k, v in o.items() if k in allowed_obj_keys})
+            for o in cfg_dict.get('objectives', [])
+        ]
         models = [ModelConfig(**m) for m in cfg_dict.get('models', [])]
         constraints = [ParameterConstraint(**c) for c in cfg_dict.get('parameter_constraints', [])]
         settings = cfg_dict.get('optimization_settings', {})
@@ -3309,6 +3481,7 @@ class BOPlatform:
             models=models,
             evaluator_type=cfg_dict.get('evaluator_type', EvaluatorType.VIRTUAL),
             optimization_mode=cfg_dict.get('optimization_mode', settings.get('optimization_mode', OptimizationMode.BATCH)),
+            run_mode=cfg_dict.get('run_mode', settings.get('run_mode', OptimizationRunMode.MANUAL_CONTINUE)),
             sdl_settings=cfg_dict.get('sdl_settings', {}),
             task_parameter_name=cfg_dict.get('task_parameter_name'),
             parameter_constraints=constraints,
@@ -3471,6 +3644,18 @@ class BOPlatform:
         uses_direct = progress.get('uses_direct_objectives', False)
         status = progress.get('status', 'idle')
         optimizer = st.session_state.get('optimizer')
+        current_trial = progress.get('current_trial') or {}
+        render_token = (
+            f"b{int(progress.get('current_batch', 0))}"
+            f"_c{int(progress.get('candidates_completed', 0))}"
+            f"_t{current_trial.get('trial_index', 'none')}"
+            f"_s{status}"
+        )
+
+        def _live_chart_key(name: str) -> str:
+            return f"{name}_{render_token}"
+
+        progress_container.empty()
         with progress_container.container():
             st.subheader("Optimization Progress")
             col1, col2, col3, col4 = st.columns(4)
@@ -3489,7 +3674,11 @@ class BOPlatform:
             if status == 'completed':
                 st.success("All batches completed.")
             elif status in ('paused', 'awaiting_resume'):
-                st.info("Batch finished. Click Resume / Next Batch to continue.")
+                run_mode = progress.get('run_mode', OptimizationRunMode.MANUAL_CONTINUE.value)
+                if run_mode == OptimizationRunMode.MANUAL_CONTINUE.value:
+                    st.info("Batch finished. Click Resume / Next Batch to continue.")
+                else:
+                    st.info("Optimization is paused. Click Resume to continue the remaining run.")
             elif status == 'stopped':
                 st.warning("Optimization stopped. Load the saved checkpoint to continue later.")
 
@@ -3546,7 +3735,7 @@ class BOPlatform:
                             labels={'candidate': 'Candidate', 'test_r2': 'Test R2', 'objective': 'Objective'},
                             title="Best-model test R2 by objective",
                         )
-                        st.plotly_chart(fig_r2, use_container_width=True, key="live_virtual_model_r2")
+                        st.plotly_chart(fig_r2, use_container_width=True, key=_live_chart_key("live_virtual_model_r2"))
 
                         fig_rmse = px.line(
                             perf_hist_df,
@@ -3558,7 +3747,7 @@ class BOPlatform:
                             labels={'candidate': 'Candidate', 'test_rmse': 'Test RMSE', 'objective': 'Objective'},
                             title="Best-model test RMSE by objective",
                         )
-                        st.plotly_chart(fig_rmse, use_container_width=True, key="live_virtual_model_rmse")
+                        st.plotly_chart(fig_rmse, use_container_width=True, key=_live_chart_key("live_virtual_model_rmse"))
 
             if uses_direct:
                 obj_hist = progress.get('objective_history', {})
@@ -3575,7 +3764,7 @@ class BOPlatform:
                         color_continuous_scale=px.colors.sequential.Viridis
                     )
                     fig.update_traces(marker=dict(size=9, line=dict(width=1, color='rgba(0,0,0,0.3)')))
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key=_live_chart_key("live_pareto_exploration"))
                 elif len(names) == 1:
                     series = obj_hist[names[0]]
                     if series:
@@ -3584,7 +3773,7 @@ class BOPlatform:
                             labels={'x': 'Candidate', 'y': names[0]},
                             title=f"{names[0]} trajectory", markers=True
                         )
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True, key=_live_chart_key("live_single_objective_trajectory"))
                 else:
                     st.info("Waiting for objective values to plot Pareto progress.")
             else:
@@ -3596,7 +3785,7 @@ class BOPlatform:
                         labels={'x': 'Candidate', 'y': 'Best distance'},
                         title="Distance convergence"
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key=_live_chart_key("live_distance_convergence"))
                 unc_hist = progress.get('uncertainty_history', [])
                 if unc_hist:
                     fig = px.line(
@@ -3604,10 +3793,9 @@ class BOPlatform:
                         labels={'x': 'Candidate', 'y': 'Avg uncertainty'},
                         title="Uncertainty trend"
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, key=_live_chart_key("live_uncertainty_trend"))
 
             # Latest candidate snapshot (parameters & objectives)
-            current_trial = progress.get('current_trial')
             if current_trial:
                 st.subheader("Latest Candidate")
                 c1, c2, c3, c4 = st.columns([1.0, 1.0, 1.0, 0.8])
@@ -3678,9 +3866,9 @@ class BOPlatform:
                                 labels={c: c for c in use_cols}
                             )
                             st.subheader("Parallel coordinates (live)")
-                            st.plotly_chart(fig_pc, use_container_width=True)
+                            st.plotly_chart(fig_pc, use_container_width=True, key=_live_chart_key("live_parallel_coordinates"))
                 except Exception as e:
-                    st.debug(f"Parallel coord live plot error: {e}")
+                    st.caption(f"Parallel coord live plot error: {e}")
 
     def _display_optimization_status(self):
         if not hasattr(self, 'optimization_result'):

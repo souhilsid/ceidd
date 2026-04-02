@@ -192,11 +192,28 @@ class GeneralizedEvaluator:
             return float(floor)
         return float(max([floor] + finite_abs))
 
+    def _effective_target_tolerance(self, obj_config: ObjectiveConfig, pred_value: Optional[float] = None) -> float:
+        tolerance = max(0.0, float(getattr(obj_config, "tolerance", 0.0) or 0.0))
+        tolerance_mode = str(getattr(obj_config, "tolerance_mode", "absolute") or "absolute").lower()
+        if tolerance_mode != "percent":
+            return tolerance
+
+        target_val = float(obj_config.target_value if obj_config.target_value is not None else 0.0)
+        reference = abs(target_val)
+        if reference <= 1e-12 and pred_value is not None:
+            try:
+                reference = abs(float(pred_value))
+            except (TypeError, ValueError):
+                reference = 0.0
+        if reference <= 1e-12:
+            return tolerance / 100.0
+        return reference * tolerance / 100.0
+
     def _default_distance_normalization_config(self) -> Dict[str, Any]:
         return {
             "enabled": True,
             "clip_component": 10.0,  # 0 disables clipping
-            "normalize_weight_norm": True,
+            "normalize_weight_norm": False,
         }
 
     def _resolve_distance_normalization_config(
@@ -244,7 +261,7 @@ class GeneralizedEvaluator:
 
         if obj_type == "target_value":
             target_val = float(obj_config.target_value if obj_config.target_value is not None else 0.0)
-            tolerance = max(0.0, float(obj_config.tolerance))
+            tolerance = self._effective_target_tolerance(obj_config, pred_value=pred_value)
             deviation = abs(float(pred_value) - target_val)
             if deviation <= tolerance:
                 return 0.0
@@ -323,6 +340,105 @@ class GeneralizedEvaluator:
         print(f"Г?O Error in distance calculation: {e}")
         return float('inf')
 
+    def calculate_distance_uncertainty(
+        self,
+        predictions: np.ndarray,
+        objective_uncertainties: Dict[str, float],
+        include_direct_objectives: bool = True,
+    ) -> float:
+        """Propagate per-objective SEM through the weighted distance formula."""
+        try:
+            if isinstance(predictions, (list, tuple)):
+                pred_array = np.array(predictions, dtype=np.float64)
+            elif isinstance(predictions, np.ndarray):
+                pred_array = predictions.flatten().astype(np.float64)
+            else:
+                pred_array = np.array([float(predictions)], dtype=np.float64)
+
+            n_objectives = len(self.objective_configs)
+            if len(pred_array) < n_objectives:
+                pred_array = np.pad(pred_array, (0, n_objectives - len(pred_array)))
+            elif len(pred_array) > n_objectives:
+                pred_array = pred_array[:n_objectives]
+
+            cfg = self.distance_normalization_config
+            apply_postprocessing = bool(cfg.get("enabled", True))
+            clip_component = float(cfg.get("clip_component", 0.0))
+            normalize_weight_norm = bool(cfg.get("normalize_weight_norm", True))
+
+            weighted_components: List[float] = []
+            per_objective_sigma_terms: List[float] = []
+            weight_sq_sum = 0.0
+
+            for i, obj_config in enumerate(self.objective_configs):
+                obj_type = obj_config.type.value if hasattr(obj_config.type, "value") else obj_config.type
+                if not include_direct_objectives and obj_type in ["minimize", "maximize"]:
+                    continue
+
+                pred_value = float(pred_array[i])
+                sem_value = float(abs(objective_uncertainties.get(obj_config.name, 0.0) or 0.0))
+                raw_component = float(self._compute_distance_component(pred_value, obj_config))
+                component = raw_component
+                clipped = False
+                if apply_postprocessing and clip_component > 0.0 and np.isfinite(component):
+                    clipped_component = float(np.clip(component, -clip_component, clip_component))
+                    clipped = not np.isclose(clipped_component, component)
+                    component = clipped_component
+
+                positive_component = max(0.0, component)
+                obj_weight = float(max(obj_config.weight, 1e-12))
+                weighted_component = positive_component * obj_weight
+                weighted_components.append(weighted_component)
+                weight_sq_sum += obj_weight * obj_weight
+
+                slope = 0.0
+                if not clipped and positive_component > 0.0:
+                    if obj_type == "target_range":
+                        target_min, target_max = obj_config.target_range
+                        width = abs(float(target_max) - float(target_min))
+                        if width < 1e-12:
+                            width = self._safe_scale(target_min, target_max, pred_value)
+                        if pred_value < target_min or pred_value > target_max:
+                            slope = 1.0 / float(width)
+                    elif obj_type == "target_value":
+                        target_val = float(obj_config.target_value if obj_config.target_value is not None else 0.0)
+                        tolerance = self._effective_target_tolerance(obj_config, pred_value=pred_value)
+                        deviation = abs(float(pred_value) - target_val)
+                        if deviation > tolerance:
+                            scale = self._safe_scale(target_val, pred_value, tolerance)
+                            slope = 1.0 / float(scale)
+                    elif obj_type == "minimize":
+                        slope = 1.0
+                    elif obj_type == "maximize":
+                        slope = 0.0
+
+                per_objective_sigma_terms.append((obj_weight * slope * sem_value) ** 2)
+
+            if not weighted_components:
+                return 0.0
+
+            total_distance = float(np.linalg.norm(weighted_components))
+            if apply_postprocessing and normalize_weight_norm and weight_sq_sum > 0.0:
+                total_distance = total_distance / float(np.sqrt(weight_sq_sum))
+            if total_distance <= 1e-12:
+                return 0.0
+
+            propagated_variance = 0.0
+            for weighted_component, sigma_term in zip(weighted_components, per_objective_sigma_terms):
+                if sigma_term <= 0.0 or weighted_component <= 0.0:
+                    continue
+                sensitivity = weighted_component / total_distance
+                propagated_variance += (sensitivity ** 2) * sigma_term
+
+            sigma_distance = float(np.sqrt(max(propagated_variance, 0.0)))
+            if apply_postprocessing and normalize_weight_norm and weight_sq_sum > 0.0:
+                sigma_distance = sigma_distance / float(np.sqrt(weight_sq_sum))
+            return sigma_distance
+
+        except Exception as e:
+            print(f"Warning: distance uncertainty calculation failed: {e}")
+            return 0.0
+
     def compute_objective_outputs(
         self,
         predictions: np.ndarray,
@@ -391,6 +507,18 @@ class GeneralizedEvaluator:
         elif model_type == "svm":
             params['C'] = trial.suggest_float('C', 0.1, 100.0, log=True)
             params['gamma'] = trial.suggest_float('gamma', 1e-4, 1.0, log=True)
+
+        elif model_type == "mlp":
+            params['hidden_layer_sizes'] = (
+                trial.suggest_int('hidden_layer_1', 32, 256),
+                trial.suggest_int('hidden_layer_2', 16, 128),
+            )
+            params['alpha'] = trial.suggest_float('alpha', 1e-6, 1e-1, log=True)
+            params['learning_rate_init'] = trial.suggest_float('learning_rate_init', 1e-4, 1e-1, log=True)
+
+        elif model_type == "linear_regression":
+            # No meaningful hyperparameters to tune; keep defaults.
+            pass
             
         elif model_type == "gam":
             # Use simpler parameter ranges for GAM to avoid compatibility issues

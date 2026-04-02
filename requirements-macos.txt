@@ -1,0 +1,2 @@
+# macOS / Linux use the same exact pinned CEID dependency set.
+-r requirements.txt

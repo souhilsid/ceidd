@@ -98,6 +98,12 @@ class OptimizationMode(str, Enum):
     BATCH = "batch"
     SEQUENTIAL = "sequential"
 
+
+class OptimizationRunMode(str, Enum):
+    """How optimization advances once started."""
+    CONTINUOUS = "continuous"
+    MANUAL_CONTINUE = "manual_continue"
+
 @dataclass
 class ParameterConfig:
     name: str
@@ -145,12 +151,22 @@ class ObjectiveConfig:
     target_range: Optional[Tuple[float, float]] = None
     target_value: Optional[float] = None
     tolerance: float = 0.0
+    tolerance_mode: str = "absolute"
     weight: float = 1.0
+    weight_percent: Optional[float] = None
     
     def __post_init__(self):
         # Convert string to enum if needed
         if isinstance(self.type, str):
             self.type = ObjectiveType(self.type)
+        self.tolerance_mode = str(getattr(self, "tolerance_mode", "absolute") or "absolute").lower()
+        if self.weight_percent is None:
+            self.weight_percent = float(self.weight) * 100.0
+        else:
+            try:
+                self.weight_percent = float(self.weight_percent)
+            except (TypeError, ValueError):
+                self.weight_percent = float(self.weight) * 100.0
     
     def validate(self):
         if self.type == ObjectiveType.TARGET_RANGE:
@@ -179,8 +195,12 @@ class ObjectiveConfig:
                 raise ValueError(f"Objective {self.name} tolerance must be numeric")
             if tol < 0:
                 raise ValueError(f"Objective {self.name} tolerance must be non-negative")
+            if self.tolerance_mode not in {"absolute", "percent"}:
+                raise ValueError(f"Objective {self.name} tolerance_mode must be 'absolute' or 'percent'")
         if self.weight <= 0:
             raise ValueError(f"Objective {self.name} weight must be positive")
+        if self.weight_percent is not None and self.weight_percent < 0:
+            raise ValueError(f"Objective {self.name} weight_percent must be non-negative")
 
 @dataclass
 class ModelConfig:
@@ -200,6 +220,7 @@ class OptimizationConfig:
     # NEW: evaluator and execution mode
     evaluator_type: EvaluatorType = EvaluatorType.VIRTUAL
     optimization_mode: OptimizationMode = OptimizationMode.BATCH
+    run_mode: OptimizationRunMode = OptimizationRunMode.MANUAL_CONTINUE
     sdl_settings: Dict[str, Any] = field(default_factory=dict)
     task_parameter_name: Optional[str] = None
     
@@ -243,6 +264,9 @@ class OptimizationConfig:
 
         if isinstance(self.optimization_mode, str):
             self.optimization_mode = OptimizationMode(self.optimization_mode)
+
+        if isinstance(self.run_mode, str):
+            self.run_mode = OptimizationRunMode(self.run_mode)
 
         if isinstance(self.task_parameter_name, str):
             self.task_parameter_name = self.task_parameter_name.strip() or None
@@ -505,7 +529,18 @@ class ConfigManager:
         
         objectives = []
         for obj_data in ui_params['objectives']:
-            obj_config = ObjectiveConfig(**obj_data)
+            allowed_obj_keys = {
+                'name',
+                'type',
+                'target_range',
+                'target_value',
+                'tolerance',
+                'tolerance_mode',
+                'weight',
+                'weight_percent',
+            }
+            clean_obj_data = {k: v for k, v in obj_data.items() if k in allowed_obj_keys}
+            obj_config = ObjectiveConfig(**clean_obj_data)
             objectives.append(obj_config)
         
         models = []
@@ -557,6 +592,7 @@ class ConfigManager:
             models=models,
             evaluator_type=evaluator_type,
             optimization_mode=ui_params.get('optimization_mode', OptimizationMode.BATCH),
+            run_mode=ui_params.get('run_mode', OptimizationRunMode.MANUAL_CONTINUE),
             sdl_settings=ui_params.get('sdl_settings', {}),
             task_parameter_name=ui_params.get('task_parameter_name'),
             parameter_constraints=parameter_constraints,  # NEW
@@ -595,6 +631,7 @@ class ConfigManager:
             'experiment_name': self.current_config.experiment_name,
             'evaluator_type': self.current_config.evaluator_type.value if hasattr(self.current_config.evaluator_type, 'value') else self.current_config.evaluator_type,
             'optimization_mode': self.current_config.optimization_mode.value if hasattr(self.current_config.optimization_mode, 'value') else self.current_config.optimization_mode,
+            'run_mode': self.current_config.run_mode.value if hasattr(self.current_config.run_mode, 'value') else self.current_config.run_mode,
             'sdl_settings': self.current_config.sdl_settings,
             'task_parameter_name': self.current_config.task_parameter_name,
             'parameters': [
@@ -613,7 +650,9 @@ class ConfigManager:
                     'target_range': o.target_range,
                     'target_value': o.target_value,
                     'tolerance': o.tolerance,
-                    'weight': o.weight
+                    'tolerance_mode': o.tolerance_mode,
+                    'weight': o.weight,
+                    'weight_percent': o.weight_percent,
                 } for o in self.current_config.objectives
             ],
             'models': [
@@ -640,6 +679,7 @@ class ConfigManager:
                 'batch_size': self.current_config.batch_size,
                 'max_iterations': self.current_config.max_iterations,
                 'optimization_mode': self.current_config.optimization_mode.value if hasattr(self.current_config.optimization_mode, 'value') else self.current_config.optimization_mode,
+                'run_mode': self.current_config.run_mode.value if hasattr(self.current_config.run_mode, 'value') else self.current_config.run_mode,
                 'random_seed': self.current_config.random_seed,
                 'n_initial_points': self.current_config.n_initial_points,
                 'generation_strategy': self.current_config.generation_strategy.value,
@@ -682,7 +722,9 @@ class ConfigManager:
                 target_range=o.get('target_range'),
                 target_value=o.get('target_value'),
                 tolerance=o.get('tolerance', 0.0),
-                weight=o.get('weight', 1.0)
+                tolerance_mode=o.get('tolerance_mode', 'absolute'),
+                weight=o.get('weight', 1.0),
+                weight_percent=o.get('weight_percent')
             ) for o in config_dict['objectives']
         ]
         
@@ -725,6 +767,7 @@ class ConfigManager:
             models=models,
             evaluator_type=config_dict.get('evaluator_type', EvaluatorType.VIRTUAL),
             optimization_mode=config_dict.get('optimization_mode', opt_settings.get('optimization_mode', OptimizationMode.BATCH)),
+            run_mode=config_dict.get('run_mode', opt_settings.get('run_mode', OptimizationRunMode.MANUAL_CONTINUE)),
             sdl_settings=config_dict.get('sdl_settings', {}),
             task_parameter_name=config_dict.get('task_parameter_name'),
             parameter_constraints=parameter_constraints,  # NEW

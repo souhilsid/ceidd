@@ -288,6 +288,14 @@ def _parse_env_bool(value: Optional[str], default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_first(*keys: str, default: str = "") -> str:
+    for key in keys:
+        value = os.getenv(key)
+        if value not in [None, ""]:
+            return str(value)
+    return default
+
+
 def _set_active_trial_index(trial_index: Optional[int]) -> None:
     global _ACTIVE_TRIAL_INDEX
     with _ACTIVE_TRIAL_LOCK:
@@ -2023,17 +2031,17 @@ def parse_args():
     )
 
     # Unity transport options
-    parser.add_argument("--unity-enable", action="store_true", help="Enable Unity digital-twin streaming")
-    parser.add_argument("--unity-transport", choices=["livekit", "tcp", "none"], default=os.getenv("UNITY_TRANSPORT", "livekit"))
+    parser.add_argument("--unity-enable", action=argparse.BooleanOptionalAction, default=_parse_env_bool(_env_first("SDL_EMBEDDED_UNITY_ENABLE", "UNITY_ENABLE"), default=False), help="Enable Unity digital-twin streaming")
+    parser.add_argument("--unity-transport", choices=["livekit", "tcp", "none"], default=_env_first("SDL_EMBEDDED_UNITY_TRANSPORT", "UNITY_TRANSPORT", default="livekit"))
     parser.add_argument("--unity-host", default="0.0.0.0", help="Bind host for Unity twin TCP server fallback")
     parser.add_argument("--unity-port", type=int, default=7100, help="Bind port for Unity twin TCP server fallback")
 
     # LiveKit options
-    parser.add_argument("--livekit-url", default=os.getenv("LIVEKIT_URL", LIVEKIT_DEFAULT_URL))
-    parser.add_argument("--livekit-room", default=os.getenv("LIVEKIT_ROOM", LIVEKIT_DEFAULT_ROOM))
-    parser.add_argument("--livekit-topic", default=os.getenv("LIVEKIT_TOPIC", LIVEKIT_DEFAULT_TOPIC))
-    parser.add_argument("--sdl-livekit-token", default=os.getenv("SDL_LIVEKIT_TOKEN", ""))
-    parser.add_argument("--unity-dest-identity", default=os.getenv("UNITY_DEST_IDENTITY", "unity"))
+    parser.add_argument("--livekit-url", default=_env_first("SDL_EMBEDDED_LIVEKIT_URL", "LIVEKIT_URL", default=LIVEKIT_DEFAULT_URL))
+    parser.add_argument("--livekit-room", default=_env_first("SDL_EMBEDDED_LIVEKIT_ROOM", "LIVEKIT_ROOM", default=LIVEKIT_DEFAULT_ROOM))
+    parser.add_argument("--livekit-topic", default=_env_first("SDL_EMBEDDED_LIVEKIT_TOPIC", "LIVEKIT_TOPIC", default=LIVEKIT_DEFAULT_TOPIC))
+    parser.add_argument("--sdl-livekit-token", default=_env_first("SDL_EMBEDDED_LIVEKIT_TOKEN", "SDL_LIVEKIT_TOKEN", default=""))
+    parser.add_argument("--unity-dest-identity", default=_env_first("SDL_EMBEDDED_UNITY_DEST_IDENTITY", "UNITY_DEST_IDENTITY", default="unity"))
 
     # Arduino port override
     parser.add_argument("--arduino-port", default=ARDUINO_PORT)
@@ -2048,7 +2056,7 @@ def _setup_unity_transport(args) -> None:
     UNITY_TOPIC = str(args.livekit_topic).strip() or LIVEKIT_DEFAULT_TOPIC
     requested_transport = str(args.unity_transport).strip().lower()
 
-    env_enable = _parse_env_bool(os.getenv("UNITY_ENABLE"), default=False)
+    env_enable = _parse_env_bool(_env_first("SDL_EMBEDDED_UNITY_ENABLE", "UNITY_ENABLE"), default=False)
     auto_enable_livekit = bool(args.sdl_livekit_token and requested_transport == "livekit")
     auto_enable_tcp = requested_transport == "tcp"
     unity_enabled = bool(args.unity_enable or env_enable or auto_enable_livekit or auto_enable_tcp)
